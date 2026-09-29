@@ -1,1 +1,90 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>한국어 읽기 숙제 / 韩语朗读作业</title>
+<style>
+  body { font-family: "Noto Sans KR", system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #222; }
+  textarea { width: 100%; font: inherit; font-size: 1.2rem; padding: .6rem; box-sizing: border-box; }
+  button { font: inherit; padding: .6rem 1rem; margin: .5rem .5rem .5rem 0; cursor: pointer; }
+  #score { font-size: 3rem; font-weight: 700; margin: 1rem 0 .2rem; }
+  .bad { color: #c0392b; text-decoration: underline; }
+  #marks { font-size: 1.5rem; }
+  audio { width: 100%; margin-top: .5rem; }
+  .muted { color: #666; }
+</style>
+</head>
+<body>
+<h1>한국어 읽기 숙제 <span class="muted">韩语朗读作业</span></h1>
 
+<label for="ref">읽을 문장 / 朗读句子</label>
+<textarea id="ref" rows="3">저는 매일 아침 학교에서 한국어를 공부합니다.</textarea>
+
+<button id="rec">● 녹음 시작 / 开始录音</button>
+<button id="stop" disabled>■ 정지 / 停止</button>
+<button id="send" disabled>제출 / 提交</button>
+<audio id="player" controls hidden></audio>
+
+<p id="status" class="muted"></p>
+<div id="result" hidden>
+  <div id="score"></div>
+  <div id="marks"></div>
+  <p class="muted">인식 결과 / 识别结果: <span id="transcript"></span></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let recorder, chunks = [], blob;
+
+$("rec").onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = () => {
+      blob = new Blob(chunks, { type: recorder.mimeType });
+      $("player").src = URL.createObjectURL(blob);
+      $("player").hidden = false;
+      stream.getTracks().forEach(t => t.stop());
+      $("send").disabled = false;
+    };
+    recorder.start();
+    $("rec").disabled = true; $("stop").disabled = false; $("send").disabled = true;
+    $("status").textContent = "녹음 중... / 录音中...";
+  } catch (e) {
+    $("status").textContent = "마이크를 사용할 수 없습니다. 권한을 확인하세요. / 无法使用麦克风，请检查权限。";
+  }
+};
+
+$("stop").onclick = () => {
+  recorder.stop();
+  $("rec").disabled = false; $("stop").disabled = true;
+  $("status").textContent = "";
+};
+
+$("send").onclick = async () => {
+  const fd = new FormData();
+  fd.append("reference", $("ref").value);
+  fd.append("audio", blob, "rec");
+  $("send").disabled = true;
+  $("status").textContent = "채점 중... / 评分中...";
+  try {
+    const res = await fetch("/api/check", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "오류");
+    $("score").textContent = data.score + "%";
+    $("marks").innerHTML = data.marks
+      .map(m => m.ok ? m.ch : `<span class="bad">${m.ch}</span>`).join("");
+    $("transcript").textContent = data.transcript;
+    $("result").hidden = false;
+    $("status").textContent = "";
+  } catch (e) {
+    $("status").textContent = e.message;
+  }
+  $("send").disabled = false;
+};
+</script>
+</body>
+</html>
