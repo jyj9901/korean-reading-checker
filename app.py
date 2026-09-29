@@ -6,7 +6,14 @@ from flask import Flask, jsonify, request, send_from_directory
 from openai import OpenAI
 
 app = Flask(__name__, static_folder="public")
-client = OpenAI()  # reads OPENAI_API_KEY from the environment
+# 기본은 OpenAI. Groq 등 OpenAI 호환 서비스를 쓰려면 환경 변수만 바꾸면 됩니다.
+#   STT_API_KEY  : 서비스 키 (없으면 OPENAI_API_KEY 사용)
+#   STT_BASE_URL : 예) https://api.groq.com/openai/v1
+#   STT_MODEL    : 예) whisper-large-v3
+client = OpenAI(
+    api_key=os.getenv("STT_API_KEY") or os.getenv("OPENAI_API_KEY") or "missing",
+    base_url=os.getenv("STT_BASE_URL") or None,
+)
 STT_MODEL = os.getenv("STT_MODEL", "whisper-1")
 
 # 발음형 변환(선택): pip install g2pk 가 되어 있으면 자동 사용
