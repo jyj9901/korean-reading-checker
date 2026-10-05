@@ -1,8 +1,11 @@
 import os
 import re
+import secrets
+import uuid
 from difflib import SequenceMatcher
 
-from flask import Flask, jsonify, request, send_from_directory
+import requests
+from flask import Flask, Response, jsonify, request, send_from_directory
 from openai import OpenAI
 
 app = Flask(__name__, static_folder="public")
@@ -15,6 +18,10 @@ client = OpenAI(
     base_url=os.getenv("STT_BASE_URL") or None,
 )
 STT_MODEL = os.getenv("STT_MODEL", "whisper-1")
+
+SB_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SB_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+TEACHER_PW = os.getenv("TEACHER_PASSWORD", "")
 
 # 발음형 변환(선택): pip install g2pk 가 되어 있으면 자동 사용
 try:
@@ -93,22 +100,128 @@ def index():
     return send_from_directory("public", "index.html")
 
 
-@app.post("/api/check")
-def check():
-    ref = request.form.get("reference", "").strip()
+def sb(method, path, **kw):
+    h = {"apikey": SB_KEY}
+    if not SB_KEY.startswith("sb_"):  # 예전 service_role(JWT) 키만 Authorization 헤더가 필요
+        h["Authorization"] = f"Bearer {SB_KEY}"
+    h.update(kw.pop("headers", {}))
+    r = requests.request(method, f"{SB_URL}{path}", headers=h, timeout=20, **kw)
+    r.raise_for_status()
+    return r
+
+
+def is_teacher():
+    pw = request.headers.get("X-Teacher-Password", "")
+    return bool(TEACHER_PW) and secrets.compare_digest(pw.encode(), TEACHER_PW.encode())
+
+
+def deny():
+    return jsonify(error="선생님 비밀번호가 올바르지 않습니다."), 401
+
+
+def find_assignment(code):
+    code = (code or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{6}", code):
+        return None
+    rows = sb("GET", "/rest/v1/assignments",
+              params={"code": f"eq.{code}", "select": "id,code,title,sentence"}).json()
+    return rows[0] if rows else None
+
+
+@app.errorhandler(requests.RequestException)
+def db_error(e):
+    return jsonify(error="데이터베이스 오류가 발생했습니다."), 500
+
+
+@app.get("/teacher")
+def teacher_page():
+    return send_from_directory("public", "teacher.html")
+
+
+@app.get("/api/assignment/<code>")
+def get_assignment(code):
+    a = find_assignment(code)
+    if not a:
+        return jsonify(error="숙제 코드를 찾을 수 없습니다."), 404
+    return jsonify(title=a["title"], sentence=a["sentence"])
+
+
+@app.post("/api/submit")
+def submit():
+    a = find_assignment(request.form.get("code"))
+    student = request.form.get("student", "").strip()[:50]
     f = request.files.get("audio")
-    if not ref or not f:
-        return jsonify(error="기준 문장과 녹음 파일이 필요합니다."), 400
-    mt = f.mimetype or ""
+    if not a:
+        return jsonify(error="숙제 코드를 찾을 수 없습니다."), 404
+    if not student or not f:
+        return jsonify(error="이름과 녹음이 필요합니다."), 400
+    data, mt = f.read(), f.mimetype or ""
     ext = "mp4" if "mp4" in mt else "ogg" if "ogg" in mt else "webm"
     try:
-        tr = client.audio.transcriptions.create(
-            model=STT_MODEL, file=(f"rec.{ext}", f.read()), language="ko"
-        )
+        hyp = client.audio.transcriptions.create(
+            model=STT_MODEL, file=(f"rec.{ext}", data), language="ko"
+        ).text
     except Exception as e:
         return jsonify(error=f"음성 인식 실패: {e}"), 500
-    hyp = tr.text
-    return jsonify(transcript=hyp, score=accuracy(ref, hyp), marks=mark(ref, hyp))
+    score = accuracy(a["sentence"], hyp)
+    path = f"{a['id']}/{uuid.uuid4().hex}.{ext}"
+    try:
+        sb("POST", f"/storage/v1/object/recordings/{path}", data=data,
+           headers={"Content-Type": mt or "application/octet-stream"})
+    except requests.RequestException:
+        path = None  # 녹음 저장이 실패해도 점수는 기록
+    sb("POST", "/rest/v1/submissions", json={
+        "assignment_id": a["id"], "student": student,
+        "score": score, "transcript": hyp, "audio_path": path})
+    return jsonify(transcript=hyp, score=score, marks=mark(a["sentence"], hyp))
+
+
+@app.post("/api/assignments")
+def create_assignment():
+    if not is_teacher():
+        return deny()
+    d = request.get_json(silent=True) or {}
+    title, sentence = d.get("title", "").strip(), d.get("sentence", "").strip()
+    if not title or not sentence:
+        return jsonify(error="제목과 문장을 입력하세요."), 400
+    row = sb("POST", "/rest/v1/assignments",
+             json={"code": secrets.token_hex(3).upper(), "title": title, "sentence": sentence},
+             headers={"Prefer": "return=representation"}).json()[0]
+    return jsonify(row)
+
+
+@app.get("/api/assignments")
+def list_assignments():
+    if not is_teacher():
+        return deny()
+    return jsonify(sb("GET", "/rest/v1/assignments",
+                      params={"select": "*", "order": "created_at.desc"}).json())
+
+
+@app.get("/api/submissions")
+def list_submissions():
+    if not is_teacher():
+        return deny()
+    params = {"select": "id,student,score,transcript,audio_path,created_at",
+              "order": "created_at.desc"}
+    aid = request.args.get("assignment_id", "")
+    if aid.isdigit():
+        params["assignment_id"] = f"eq.{aid}"
+    return jsonify(sb("GET", "/rest/v1/submissions", params=params).json())
+
+
+@app.get("/api/audio/<int:sid>")
+def get_audio(sid):
+    if not is_teacher():
+        return deny()
+    rows = sb("GET", "/rest/v1/submissions",
+              params={"id": f"eq.{sid}", "select": "audio_path"}).json()
+    if not rows or not rows[0]["audio_path"]:
+        return jsonify(error="저장된 녹음이 없습니다."), 404
+    p = rows[0]["audio_path"]
+    r = sb("GET", f"/storage/v1/object/recordings/{p}")
+    mime = {"mp4": "audio/mp4", "ogg": "audio/ogg"}.get(p.rsplit(".", 1)[-1], "audio/webm")
+    return Response(r.content, mimetype=mime)
 
 
 if __name__ == "__main__":
