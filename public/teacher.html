@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>선생님 페이지</title>
+<style>
+  body { font-family: "Noto Sans KR", system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #222; }
+  input, textarea { font: inherit; padding: .5rem; margin: .2rem 0 .6rem; width: 100%; box-sizing: border-box; }
+  button { font: inherit; padding: .4rem .8rem; margin: .2rem .3rem .2rem 0; cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border-bottom: 1px solid #ddd; padding: .4rem; text-align: left; vertical-align: top; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: .6rem .8rem; margin: .5rem 0; }
+  .muted { color: #666; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>선생님 페이지</h1>
+<input id="pw" type="password" placeholder="선생님 비밀번호">
+<button id="login">로그인</button>
+<p id="status" class="muted"></p>
+
+<div id="main" hidden>
+  <h2>새 숙제 만들기</h2>
+  <input id="title" placeholder="제목 (예: 1과 읽기)">
+  <textarea id="sentence" rows="3" placeholder="학생이 읽을 문장"></textarea>
+  <button id="create">숙제 만들기</button>
+
+  <h2>숙제 목록</h2>
+  <div id="list"></div>
+
+  <h2 id="rh"></h2>
+  <table id="results"></table>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let PW = "";
+const say = t => $("status").textContent = t;
+
+async function api(url, opt = {}) {
+  const res = await fetch(url, { ...opt, headers: { "Content-Type": "application/json", "X-Teacher-Password": PW } });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(d.error || "오류");
+  return d;
+}
+
+async function loadList() {
+  const rows = await api("/api/assignments");
+  $("list").innerHTML = rows.map(a => `
+    <div class="card">
+      <b>${esc(a.title)}</b> <span class="muted">코드 ${esc(a.code)}</span><br>
+      ${esc(a.sentence)}<br>
+      <span class="muted">학생 링크: ${esc(location.origin)}/?c=${esc(a.code)}</span><br>
+      <button data-id="${a.id}" data-title="${esc(a.title)}">결과 보기</button>
+    </div>`).join("") || "<p class='muted'>아직 숙제가 없습니다.</p>";
+}
+
+$("login").onclick = async () => {
+  PW = $("pw").value;
+  try { await loadList(); $("main").hidden = false; say(""); }
+  catch (e) { say(e.message); }
+};
+
+$("create").onclick = async () => {
+  try {
+    await api("/api/assignments", { method: "POST", body: JSON.stringify({ title: $("title").value, sentence: $("sentence").value }) });
+    $("title").value = ""; $("sentence").value = "";
+    await loadList(); say("숙제를 만들었습니다.");
+  } catch (e) { say(e.message); }
+};
+
+$("list").onclick = async e => {
+  const id = e.target.dataset.id;
+  if (!id) return;
+  try {
+    const rows = await api("/api/submissions?assignment_id=" + id);
+    $("rh").textContent = e.target.dataset.title + " — 제출 " + rows.length + "건";
+    $("results").innerHTML = "<tr><th>이름</th><th>점수</th><th>시간</th><th>인식 결과</th><th>녹음</th></tr>" +
+      rows.map(r => `<tr><td>${esc(r.student)}</td><td>${esc(r.score)}%</td>
+        <td>${esc(new Date(r.created_at).toLocaleString("ko-KR"))}</td><td>${esc(r.transcript)}</td>
+        <td>${r.audio_path ? `<button data-play="${r.id}">▶</button>` : "-"}</td></tr>`).join("");
+  } catch (err) { say(err.message); }
+};
+
+$("results").onclick = async e => {
+  const id = e.target.dataset.play;
+  if (!id) return;
+  try {
+    const res = await fetch("/api/audio/" + id, { headers: { "X-Teacher-Password": PW } });
+    if (!res.ok) throw new Error("녹음을 불러오지 못했습니다.");
+    new Audio(URL.createObjectURL(await res.blob())).play();
+  } catch (err) { say(err.message); }
+};
+</script>
+</body>
+</html>
