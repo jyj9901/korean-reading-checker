@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import requests
 from flask import Flask, Response, jsonify, request, send_from_directory
 from openai import OpenAI
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__, static_folder="public")
 # 기본은 OpenAI. Groq 등 OpenAI 호환 서비스를 쓰려면 환경 변수만 바꾸면 됩니다.
@@ -21,7 +22,7 @@ STT_MODEL = os.getenv("STT_MODEL", "whisper-1")
 
 SB_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-TEACHER_PW = os.getenv("TEACHER_PASSWORD", "")
+TEACHER_PW = os.getenv("TEACHER_PASSWORD", "")  # 이제 '선생님 가입 코드'(반 등록용)로 사용
 
 # 발음형 변환(선택): pip install g2pk 가 되어 있으면 자동 사용
 try:
@@ -110,9 +111,21 @@ def sb(method, path, **kw):
     return r
 
 
-def is_teacher():
+def teacher_class():
+    """헤더의 반 ID + 비밀번호가 맞으면 그 반 정보를 돌려줌"""
+    cid = request.headers.get("X-Class-Id", "")
     pw = request.headers.get("X-Teacher-Password", "")
-    return bool(TEACHER_PW) and secrets.compare_digest(pw.encode(), TEACHER_PW.encode())
+    if not cid.isdigit() or not pw:
+        return None
+    rows = sb("GET", "/rest/v1/classes",
+              params={"id": f"eq.{cid}", "select": "id,pw_hash"}).json()
+    return rows[0] if rows and check_password_hash(rows[0]["pw_hash"], pw) else None
+
+
+def owns(c, aid):
+    """이 숙제가 로그인한 반의 숙제인지"""
+    return bool(sb("GET", "/rest/v1/assignments", params={
+        "id": f"eq.{aid}", "class_id": f"eq.{c['id']}", "select": "id"}).json())
 
 
 def deny():
@@ -176,47 +189,94 @@ def submit():
     return jsonify(transcript=hyp, score=score, marks=mark(a["sentence"], hyp))
 
 
+@app.get("/api/classes")
+def list_classes():
+    return jsonify(sb("GET", "/rest/v1/classes", params={
+        "select": "id,school,grade,class_no", "order": "school.asc,grade.asc,class_no.asc"}).json())
+
+
+@app.post("/api/classes")
+def register_class():
+    d = request.get_json(silent=True) or {}
+    code = str(d.get("signup_code", ""))
+    if not (TEACHER_PW and secrets.compare_digest(code.encode(), TEACHER_PW.encode())):
+        return jsonify(error="가입 코드가 올바르지 않습니다."), 401
+    school = " ".join(str(d.get("school", "")).split())[:60]
+    pw = str(d.get("password", ""))
+    try:
+        grade, no = int(d.get("grade")), int(d.get("class_no"))
+    except (TypeError, ValueError):
+        return jsonify(error="학년과 반은 숫자로 입력하세요."), 400
+    if not school or len(pw) < 4 or not (1 <= grade <= 12 and 1 <= no <= 99):
+        return jsonify(error="학교, 학년(1~12), 반(1~99), 비밀번호(4자 이상)를 확인하세요."), 400
+    key = re.sub(r"\s+", "", school).lower()
+    if sb("GET", "/rest/v1/classes", params={"school_key": f"eq.{key}", "grade": f"eq.{grade}",
+                                              "class_no": f"eq.{no}", "select": "id"}).json():
+        return jsonify(error="이미 등록된 반입니다."), 409
+    row = sb("POST", "/rest/v1/classes", json={
+        "school": school, "school_key": key, "grade": grade, "class_no": no,
+        "pw_hash": generate_password_hash(pw)}, headers={"Prefer": "return=representation"}).json()[0]
+    return jsonify(id=row["id"], school=school)
+
+
+@app.post("/api/login")
+def login():
+    c = teacher_class()
+    return jsonify(id=c["id"]) if c else deny()
+
+
+@app.get("/api/class/<int:cid>/assignments")
+def class_assignments(cid):
+    return jsonify(sb("GET", "/rest/v1/assignments", params={
+        "class_id": f"eq.{cid}", "select": "code,title", "order": "created_at.desc"}).json())
+
+
 @app.post("/api/assignments")
 def create_assignment():
-    if not is_teacher():
+    c = teacher_class()
+    if not c:
         return deny()
     d = request.get_json(silent=True) or {}
     title, sentence = d.get("title", "").strip(), d.get("sentence", "").strip()
     if not title or not sentence:
         return jsonify(error="제목과 문장을 입력하세요."), 400
     row = sb("POST", "/rest/v1/assignments",
-             json={"code": secrets.token_hex(3).upper(), "title": title, "sentence": sentence},
+             json={"code": secrets.token_hex(3).upper(), "title": title, "sentence": sentence,
+                   "class_id": c["id"]},
              headers={"Prefer": "return=representation"}).json()[0]
     return jsonify(row)
 
 
 @app.get("/api/assignments")
 def list_assignments():
-    if not is_teacher():
+    c = teacher_class()
+    if not c:
         return deny()
-    return jsonify(sb("GET", "/rest/v1/assignments",
-                      params={"select": "*", "order": "created_at.desc"}).json())
+    return jsonify(sb("GET", "/rest/v1/assignments", params={
+        "select": "*", "class_id": f"eq.{c['id']}", "order": "created_at.desc"}).json())
 
 
 @app.get("/api/submissions")
 def list_submissions():
-    if not is_teacher():
+    c = teacher_class()
+    if not c:
         return deny()
-    params = {"select": "id,student,score,transcript,audio_path,created_at",
-              "order": "created_at.desc"}
     aid = request.args.get("assignment_id", "")
-    if aid.isdigit():
-        params["assignment_id"] = f"eq.{aid}"
-    return jsonify(sb("GET", "/rest/v1/submissions", params=params).json())
+    if not aid.isdigit() or not owns(c, aid):
+        return jsonify([])
+    return jsonify(sb("GET", "/rest/v1/submissions", params={
+        "select": "id,student,score,transcript,audio_path,created_at",
+        "assignment_id": f"eq.{aid}", "order": "created_at.desc"}).json())
 
 
 @app.get("/api/audio/<int:sid>")
 def get_audio(sid):
-    if not is_teacher():
+    c = teacher_class()
+    if not c:
         return deny()
     rows = sb("GET", "/rest/v1/submissions",
-              params={"id": f"eq.{sid}", "select": "audio_path"}).json()
-    if not rows or not rows[0]["audio_path"]:
+              params={"id": f"eq.{sid}", "select": "audio_path,assignment_id"}).json()
+    if not rows or not rows[0]["audio_path"] or not owns(c, rows[0]["assignment_id"]):
         return jsonify(error="저장된 녹음이 없습니다."), 404
     p = rows[0]["audio_path"]
     r = sb("GET", f"/storage/v1/object/recordings/{p}")
