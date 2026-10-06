@@ -225,7 +225,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const say = (id, t, err) => { $(id).textContent = t || ""; $(id).classList.toggle("err", !!err); };
 function show(v) {
-  for (const id of ["home", "student", "teacher"]) $(id).hidden = id !== v;
+  for (const id of ["home", "student", "register", "teacher"]) $(id).hidden = id !== v;
   window.scrollTo(0, 0);
 }
 const root = document.documentElement;
