@@ -45,8 +45,8 @@
   button.ghost:hover:not(:disabled) { background: var(--soft); }
   button.rec { background: var(--bad); }
   button.rec:hover:not(:disabled) { background: var(--bad-d); }
-  input, textarea { font: inherit; width: 100%; padding: .65rem .8rem; border: 1.5px solid var(--line); border-radius: 10px; background: var(--field); color: var(--ink); margin: .25rem 0 .8rem; }
-  input:focus, textarea:focus { border-color: var(--brand); outline: none; box-shadow: 0 0 0 3px var(--soft); }
+  input, textarea, select { font: inherit; width: 100%; padding: .65rem .8rem; border: 1.5px solid var(--line); border-radius: 10px; background: var(--field); color: var(--ink); margin: .25rem 0 .8rem; }
+  input:focus, textarea:focus, select:focus { border-color: var(--brand); outline: none; box-shadow: 0 0 0 3px var(--soft); }
   label { font-size: .9rem; font-weight: 600; }
   .status { min-height: 1.5rem; margin: .4rem 0 0; font-size: .95rem; color: var(--sub); }
   .status.err { color: var(--bad); }
@@ -93,6 +93,11 @@
   th { font-size: .85rem; color: var(--sub); }
   td button { padding: .2rem .7rem; }
 
+  .pick { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: .8rem; margin-top: .8rem; }
+  .pick select { margin-bottom: 0; }
+  .item-btn { display: block; width: 100%; text-align: left; margin: .5rem 0; }
+  .link { background: none; color: var(--d-sub); text-decoration: underline; padding: .3rem 0; font-weight: 500; }
+  .link:hover:not(:disabled) { background: none; color: #fff; }
   #theme { position: fixed; top: .8rem; right: .8rem; z-index: 5; width: 2.6rem; height: 2.6rem; padding: 0; font-size: 1.2rem;
     background: var(--card); color: var(--ink); border: 1.5px solid var(--line); border-radius: 50%; }
   #theme:hover:not(:disabled) { background: var(--soft); }
@@ -121,24 +126,31 @@
     </div>
   </div>
 
+  <div class="panel">
+    <h2>우리 반 선택 <span class="sub">选择班级</span></h2>
+    <div class="pick">
+      <div><label for="c-school">학교 / 学校</label><select id="c-school"></select></div>
+      <div><label for="c-grade">학년 / 年级</label><select id="c-grade"></select></div>
+      <div><label for="c-no">반 / 班</label><select id="c-no"></select></div>
+    </div>
+    <p id="c-status" class="status" role="status"></p>
+  </div>
+
   <div class="doors">
     <div class="door">
       <h2>학생 <span class="sub">学生</span></h2>
-      <p class="sub">선생님이 알려준 숙제 코드를 입력하세요.<br>请输入老师给的作业代码。</p>
-      <div class="go">
-        <input id="h-code" maxlength="6" autocapitalize="characters" placeholder="코드 / 代码" aria-label="숙제 코드">
-        <button id="h-start">시작 / 开始</button>
-      </div>
-      <p id="h-s-status" class="status" role="status"></p>
+      <p class="sub">선택한 반의 숙제를 확인하고 녹음합니다.<br>查看所选班级的作业并录音。</p>
+      <button id="h-start">숙제 보기 / 查看作业</button>
     </div>
     <div class="door t">
       <h2>선생님 <span class="sub">老师</span></h2>
-      <p class="sub">숙제를 만들고 학생 결과를 확인합니다.</p>
+      <p class="sub">선택한 반의 비밀번호로 들어갑니다.</p>
       <div class="go">
-        <input id="h-pw" type="password" placeholder="비밀번호" aria-label="선생님 비밀번호">
+        <input id="h-pw" type="password" placeholder="반 비밀번호" aria-label="반 비밀번호">
         <button id="h-login">로그인</button>
       </div>
       <p id="h-t-status" class="status err" role="status"></p>
+      <button id="h-reg" class="link">처음이신가요? 우리 반 등록하기</button>
     </div>
   </div>
 </section>
@@ -146,7 +158,13 @@
 <!-- 학생 -->
 <section id="student" hidden>
   <div class="top"><button class="ghost back">← 처음으로 / 返回</button></div>
-  <div class="panel">
+  <div class="panel" id="s-list">
+    <h2 id="s-class"></h2>
+    <p class="sub">할 숙제를 고르세요. / 请选择作业。</p>
+    <div id="s-items"></div>
+    <p id="s-lstatus" class="status" role="status"></p>
+  </div>
+  <div class="panel" id="s-task" hidden>
     <h2 id="s-title"></h2>
     <p id="sentence"></p>
     <label for="s-name">이름 / 姓名</label>
@@ -166,9 +184,26 @@
   </div>
 </section>
 
+<!-- 반 등록 -->
+<section id="register" hidden>
+  <div class="top"><button class="ghost back">← 처음으로</button><h1>우리 반 등록</h1></div>
+  <div class="panel">
+    <label for="r-school">학교 이름</label><input id="r-school" maxlength="60">
+    <div class="pick">
+      <div><label for="r-grade">학년</label><input id="r-grade" type="number" min="1" max="12"></div>
+      <div><label for="r-no">반</label><input id="r-no" type="number" min="1" max="99"></div>
+      <div></div>
+    </div>
+    <label for="r-pw">반 비밀번호 (4자 이상)</label><input id="r-pw" type="password" autocomplete="new-password">
+    <label for="r-code">가입 코드</label><input id="r-code" type="password">
+    <button id="r-go">등록하기</button>
+    <p id="r-status" class="status" role="status"></p>
+  </div>
+</section>
+
 <!-- 선생님 -->
 <section id="teacher" hidden>
-  <div class="top"><button class="ghost back">← 처음으로</button><h1>선생님 페이지</h1></div>
+  <div class="top"><button class="ghost back">← 처음으로</button><h1>선생님 페이지 <span class="sub" id="tt"></span></h1></div>
   <div class="panel">
     <h2>새 숙제 만들기</h2>
     <input id="t-title" placeholder="제목 (예: 1과 읽기)" style="margin-top:.8rem">
@@ -204,11 +239,59 @@ paintTheme();
 document.querySelectorAll(".back").forEach(b => b.onclick = () => show("home"));
 
 /* ---------- 학생 ---------- */
+/* ---------- 반 선택 ---------- */
+let CLASSES = [];
+const label = c => `${c.school} ${c.grade}학년 ${c.class_no}반`;
+const uniq = a => [...new Set(a)];
+const fill = (id, vals, fmt = v => v) => $(id).innerHTML = vals.map(v => `<option value="${esc(v)}">${esc(fmt(v))}</option>`).join("");
+const cur = () => CLASSES.find(c => c.school === $("c-school").value && String(c.grade) === $("c-grade").value && String(c.class_no) === $("c-no").value);
+function onSchool() { fill("c-grade", uniq(CLASSES.filter(c => c.school === $("c-school").value).map(c => c.grade)), g => g + "학년"); onGrade(); }
+function onGrade() { fill("c-no", CLASSES.filter(c => c.school === $("c-school").value && String(c.grade) === $("c-grade").value).map(c => c.class_no), n => n + "반"); }
+async function loadClasses() {
+  try { CLASSES = await (await fetch("/api/classes")).json(); } catch (e) { CLASSES = []; }
+  if (!Array.isArray(CLASSES)) CLASSES = [];
+  fill("c-school", uniq(CLASSES.map(c => c.school))); onSchool();
+  if (!CLASSES.length) say("c-status", "등록된 반이 없습니다. 선생님은 아래에서 먼저 반을 등록하세요. / 暂无班级，请老师先注册。");
+}
+$("c-school").onchange = onSchool; $("c-grade").onchange = onGrade;
+loadClasses();
+
+$("h-reg").onclick = () => show("register");
+$("r-go").onclick = async () => {
+  try {
+    const res = await fetch("/api/classes", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ school: $("r-school").value, grade: $("r-grade").value, class_no: $("r-no").value,
+        password: $("r-pw").value, signup_code: $("r-code").value }) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "오류");
+    await loadClasses();
+    $("c-school").value = d.school; onSchool();
+    $("c-grade").value = String(parseInt($("r-grade").value)); onGrade();
+    $("c-no").value = String(parseInt($("r-no").value));
+    $("r-pw").value = $("r-code").value = "";
+    show("home"); say("r-status", ""); say("c-status", "등록했습니다. 아래에서 반 비밀번호로 로그인하세요.");
+  } catch (e) { say("r-status", e.message, true); }
+};
+
+/* ---------- 학생 ---------- */
 let recorder, chunks = [], blob, CODE = "";
-async function openStudent() {
-  const code = $("h-code").value.trim().toUpperCase();
-  if (!code) { say("h-s-status", "코드를 입력하세요. / 请输入代码。", true); return; }
-  say("h-s-status", "불러오는 중... / 加载中...");
+const sErr = m => say($("student").hidden ? "c-status" : "s-lstatus", m, true);
+async function openList() {
+  const c = cur();
+  if (!c) { say("c-status", "먼저 학교·학년·반을 선택하세요. / 请先选择班级。", true); return; }
+  say("c-status", "불러오는 중... / 加载中...");
+  try {
+    const res = await fetch(`/api/class/${c.id}/assignments`);
+    const rows = await res.json();
+    if (!res.ok) throw new Error(rows.error || "오류");
+    $("s-class").textContent = label(c);
+    $("s-items").innerHTML = rows.map(a => `<button class="ghost item-btn" data-code="${esc(a.code)}">${esc(a.title)}</button>`).join("")
+      || "<p class='sub'>아직 숙제가 없습니다. / 暂无作业。</p>";
+    $("s-list").hidden = false; $("s-task").hidden = true; $("result").hidden = true;
+    say("c-status", ""); say("s-lstatus", ""); show("student");
+  } catch (e) { say("c-status", e.message, true); }
+}
+async function openStudent(code) {
   try {
     const res = await fetch("/api/assignment/" + encodeURIComponent(code));
     const d = await res.json();
@@ -216,15 +299,15 @@ async function openStudent() {
     CODE = code;
     $("s-title").textContent = d.title;
     $("sentence").textContent = d.sentence;
-    $("result").hidden = true;
-    say("h-s-status", ""); say("s-status", "");
+    $("result").hidden = true; say("s-status", "");
+    $("s-list").hidden = true; $("s-task").hidden = false;
     show("student");
-  } catch (e) { say("h-s-status", e.message, true); }
+  } catch (e) { sErr(e.message); }
 }
-$("h-start").onclick = openStudent;
-$("h-code").onkeydown = e => { if (e.key === "Enter") openStudent(); };
+$("h-start").onclick = openList;
+$("s-items").onclick = e => { if (e.target.dataset.code) openStudent(e.target.dataset.code); };
 const q = new URLSearchParams(location.search).get("c");
-if (q) { $("h-code").value = q; openStudent(); }
+if (q) openStudent(q.trim().toUpperCase());  // 기존 학생 링크(/?c=코드) 호환
 
 $("rec").onclick = async () => {
   try {
@@ -269,9 +352,9 @@ $("send").onclick = async () => {
 };
 
 /* ---------- 선생님 ---------- */
-let PW = "";
+let PW = "", CID = "";
 async function api(url, opt = {}) {
-  const res = await fetch(url, { ...opt, headers: { "Content-Type": "application/json", "X-Teacher-Password": PW } });
+  const res = await fetch(url, { ...opt, headers: { "Content-Type": "application/json", "X-Teacher-Password": PW, "X-Class-Id": CID } });
   const d = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(d.error || "오류");
   return d;
@@ -287,10 +370,14 @@ async function loadList() {
     </div>`).join("") || "<p class='sub'>아직 숙제가 없습니다. 위에서 첫 숙제를 만들어 보세요.</p>";
 }
 async function teacherLogin() {
-  PW = $("h-pw").value;
-  say("h-t-status", "");
-  try { await loadList(); $("rpanel").hidden = true; show("teacher"); }
-  catch (e) { say("h-t-status", e.message, true); }
+  const c = cur();
+  if (!c) { say("h-t-status", "먼저 학교·학년·반을 선택하세요.", true); return; }
+  PW = $("h-pw").value; CID = c.id; say("h-t-status", "");
+  try {
+    await api("/api/login", { method: "POST" });
+    await loadList();
+    $("tt").textContent = label(c); $("rpanel").hidden = true; show("teacher");
+  } catch (e) { say("h-t-status", e.message, true); }
 }
 $("h-login").onclick = teacherLogin;
 $("h-pw").onkeydown = e => { if (e.key === "Enter") teacherLogin(); };
@@ -321,7 +408,7 @@ $("results").onclick = async e => {
   const id = e.target.dataset.play;
   if (!id) return;
   try {
-    const res = await fetch("/api/audio/" + id, { headers: { "X-Teacher-Password": PW } });
+    const res = await fetch("/api/audio/" + id, { headers: { "X-Teacher-Password": PW, "X-Class-Id": CID } });
     if (!res.ok) throw new Error("녹음을 불러오지 못했습니다.");
     new Audio(URL.createObjectURL(await res.blob())).play();
   } catch (err) { say("t-status", err.message, true); }
