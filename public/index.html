@@ -4,10 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>한국어 읽기 숙제 / 韩语朗读作业</title>
+<script>
+  // 저장된 선택이 없으면 시간대로 자동 결정: 저녁 7시 ~ 아침 6시는 어둡게
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("theme"); } catch (e) {}
+    if (t !== "dark" && t !== "light") { var h = new Date().getHours(); t = (h >= 19 || h < 6) ? "dark" : "light"; }
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
 <style>
   :root {
+    --bg: #f3f5fb; --card: #fff; --field: #fff; --ink: #1c2340; --sub: #5b6482; --line: #dfe3f0;
+    --brand: #3346c9; --brand-d: #2634a0; --soft: #e8ecff; --bad: #d6453d; --bad-d: #b8352e; --good: #1f9d6b;
+    --on-brand: #fff; --shadow: rgba(51,70,201,.45);
+    --d-bg: #1c2340; --d-line: #1c2340; --d-sub: #aab3d6; --d-field: #2a3359; --d-fline: #3b4573; --d-btn-h: #e8ecff;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
     --bg: #0e1330; --card: #171e45; --field: #0e1330; --ink: #e9ecff; --sub: #9ba4cc; --line: #2b3568;
-    --brand: #8795ff; --brand-d: #a3aeff; --soft: #252f6b; --bad: #ff7168; --good: #3fdc9a;
+    --brand: #8795ff; --brand-d: #a3aeff; --soft: #252f6b; --bad: #ff7168; --bad-d: #ff8b83; --good: #3fdc9a;
+    --on-brand: #0e1330; --shadow: rgba(135,149,255,.5);
+    --d-bg: #26307a; --d-line: #3a46a3; --d-sub: #b7c0f0; --d-field: #1a2260; --d-fline: #3a46a3; --d-btn-h: #dfe3ff;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -20,13 +38,13 @@
   :focus-visible { outline: 3px solid #8b97ff; outline-offset: 2px; }
 
   /* 버튼·입력 */
-  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: .65rem 1.1rem; background: var(--brand); color: #0e1330; font-weight: 700; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: .65rem 1.1rem; background: var(--brand); color: var(--on-brand); font-weight: 700; }
   button:hover:not(:disabled) { background: var(--brand-d); }
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.ghost { background: transparent; color: var(--brand); border: 1.5px solid var(--line); }
   button.ghost:hover:not(:disabled) { background: var(--soft); }
   button.rec { background: var(--bad); }
-  button.rec:hover:not(:disabled) { background: #ff8b83; }
+  button.rec:hover:not(:disabled) { background: var(--bad-d); }
   input, textarea { font: inherit; width: 100%; padding: .65rem .8rem; border: 1.5px solid var(--line); border-radius: 10px; background: var(--field); color: var(--ink); margin: .25rem 0 .8rem; }
   input:focus, textarea:focus { border-color: var(--brand); outline: none; box-shadow: 0 0 0 3px var(--soft); }
   label { font-size: .9rem; font-weight: 600; }
@@ -37,7 +55,7 @@
   .hero { display: grid; grid-template-columns: 1.1fr .9fr; gap: 2.5rem; align-items: center; padding: 2rem 0 2.5rem; }
   .hero h1 { font-size: clamp(2rem, 5vw, 3.1rem); letter-spacing: -.02em; }
   .hero p { margin: 1rem 0 0; font-size: 1.05rem; max-width: 30em; }
-  .demo { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 1.4rem 1.5rem; box-shadow: 0 18px 50px -24px rgba(135,149,255,.5); }
+  .demo { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 1.4rem 1.5rem; box-shadow: 0 18px 50px -24px var(--shadow); }
   .demo small { color: var(--sub); }
   .demo .line { font-size: 1.6rem; font-weight: 600; margin: .5rem 0 1rem; letter-spacing: .02em; }
   .demo .row { display: flex; align-items: baseline; justify-content: space-between; border-top: 1px dashed var(--line); padding-top: .8rem; }
@@ -46,11 +64,11 @@
 
   .doors { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
   .door { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 1.6rem; }
-  .door.t { background: #26307a; color: #fff; border-color: #3a46a3; }
-  .door.t .sub { color: #b7c0f0; }
-  .door.t input { background: #1a2260; border-color: #3a46a3; color: #fff; }
+  .door.t { background: var(--d-bg); color: #fff; border-color: var(--d-line); }
+  .door.t .sub { color: var(--d-sub); }
+  .door.t input { background: var(--d-field); border-color: var(--d-fline); color: #fff; }
   .door.t button { background: #fff; color: #1c2340; }
-  .door.t button:hover:not(:disabled) { background: #dfe3ff; }
+  .door.t button:hover:not(:disabled) { background: var(--d-btn-h); }
   .door h2 { font-size: 1.35rem; }
   .door .sub { margin: .3rem 0 1.1rem; font-size: .95rem; }
   .door .go { display: flex; gap: .6rem; }
@@ -75,6 +93,10 @@
   th { font-size: .85rem; color: var(--sub); }
   td button { padding: .2rem .7rem; }
 
+  #theme { position: fixed; top: .8rem; right: .8rem; z-index: 5; width: 2.6rem; height: 2.6rem; padding: 0; font-size: 1.2rem;
+    background: var(--card); color: var(--ink); border: 1.5px solid var(--line); border-radius: 50%; }
+  #theme:hover:not(:disabled) { background: var(--soft); }
+
   @media (max-width: 760px) {
     .hero, .doors { grid-template-columns: 1fr; }
     .hero { gap: 1.5rem; padding-top: .5rem; }
@@ -82,6 +104,7 @@
 </style>
 </head>
 <body>
+<button id="theme" aria-label="화면 밝기 바꾸기 / 切换明暗" title="밝게/어둡게 · 明/暗"></button>
 <div class="wrap">
 
 <!-- 홈 -->
@@ -170,6 +193,14 @@ function show(v) {
   for (const id of ["home", "student", "teacher"]) $(id).hidden = id !== v;
   window.scrollTo(0, 0);
 }
+const root = document.documentElement;
+const paintTheme = () => $("theme").textContent = root.dataset.theme === "dark" ? "☀" : "☾";
+$("theme").onclick = () => {
+  root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+  try { localStorage.setItem("theme", root.dataset.theme); } catch (e) {}
+  paintTheme();
+};
+paintTheme();
 document.querySelectorAll(".back").forEach(b => b.onclick = () => show("home"));
 
 /* ---------- 학생 ---------- */
