@@ -326,7 +326,7 @@ const token = async () => (await (await sbClient()).auth.getSession()).data.sess
 async function api(url, opt = {}) {
   const res = await fetch(url, { ...opt, headers: { "Content-Type": "application/json", Authorization: "Bearer " + await token() } });
   const d = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(d.error || "오류");
+  if (!res.ok) throw new Error(d.error || "서버 응답 오류 " + res.status);
   return d;
 }
 async function enterTeacher() {
