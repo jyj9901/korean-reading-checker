@@ -2,7 +2,8 @@ import os
 import re
 import secrets
 import uuid
-from datetime import datetime, timezone
+import calendar
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 import requests
@@ -113,46 +114,14 @@ def sb(method, path, **kw):
     return r
 
 
-def is_admin():
-    pw = request.headers.get("X-Admin-Password", "")
-    return bool(TEACHER_PW) and secrets.compare_digest(pw.encode(), TEACHER_PW.encode())
-
-
-def me():
-    """로그인한 선생님 (user, profile). 토큰이 없거나 틀리면 (None, None)"""
-    tok = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not tok:
-        return None, None
-    r = requests.get(f"{SB_URL}/auth/v1/user", timeout=10,
-                     headers={"apikey": SB_ANON or SB_KEY, "Authorization": f"Bearer {tok}"})
-    if r.status_code != 200:
-        return None, None
-    u = r.json()
-    rows = sb("GET", "/rest/v1/teachers", params={"id": f"eq.{u['id']}", "select": "*"}).json()
-    return u, (rows[0] if rows else None)
-
-
-def active(p):
-    try:
-        return datetime.fromisoformat(p["paid_until"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
-    except Exception:
-        return False
-
-
-def my_class_ids(u):
-    rows = sb("GET", "/rest/v1/classes", params={"teacher_id": f"eq.{u['id']}", "select": "id"}).json()
-    return [r["id"] for r in rows]
-
-
-def owns(u, aid):
-    ids = my_class_ids(u)
-    return bool(ids) and bool(sb("GET", "/rest/v1/assignments", params={
-        "id": f"eq.{aid}", "class_id": "in.(" + ",".join(map(str, ids)) + ")", "select": "id"}).json())
+def admin_user(u):
+    """ADMIN_EMAILS(쉼표로 구분)에 있고, 이메일 인증이 끝난 계정만 관리자"""
+    emails = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+    return bool(u and u.get("email_confirmed_at") and (u.get("email") or "").lower() in emails)
 
 
 def is_admin():
-    pw = request.headers.get("X-Admin-Password", "")
-    return bool(TEACHER_PW) and secrets.compare_digest(pw.encode(), TEACHER_PW.encode())
+    return admin_user(me()[0])
 
 
 def deny():
@@ -230,7 +199,7 @@ def get_me():
     u, p = me()
     if not u:
         return deny()
-    return jsonify(email=u.get("email"), profile=p, active=bool(p) and active(p))
+    return jsonify(email=u.get("email"), profile=p, active=bool(p) and active(p), is_admin=admin_user(u))
 
 
 @app.post("/api/me")
@@ -357,22 +326,60 @@ def get_audio(sid):
     return Response(r.content, mimetype=mime)
 
 
+KST = timezone(timedelta(hours=9))
+
+
+def add_months(dt, m):
+    y, mo = divmod(dt.month - 1 + m, 12)
+    year, month = dt.year + y, mo + 1
+    return dt.replace(year=year, month=month, day=min(dt.day, calendar.monthrange(year, month)[1]))
+
+
 @app.get("/api/admin/teachers")
 def admin_teachers():
     if not is_admin():
-        return jsonify(error="관리자 비밀번호가 올바르지 않습니다."), 401
-    return jsonify(sb("GET", "/rest/v1/teachers", params={
-        "select": "id,email,name,school,paid_until", "order": "created_at.desc"}).json())
+        return jsonify(error="관리자만 볼 수 있습니다."), 403
+    ts = sb("GET", "/rest/v1/teachers", params={
+        "select": "id,email,name,school,paid_until,memo,created_at", "order": "created_at.desc"}).json()
+    cls = sb("GET", "/rest/v1/classes", params={"teacher_id": "not.is.null", "select": "id,teacher_id"}).json()
+    asg = sb("GET", "/rest/v1/assignments", params={"select": "class_id"}).json()
+    owner = {c["id"]: c["teacher_id"] for c in cls}
+    for t in ts:
+        t["n_classes"] = sum(1 for c in cls if c["teacher_id"] == t["id"])
+        t["n_assignments"] = sum(1 for a in asg if owner.get(a["class_id"]) == t["id"])
+    return jsonify(ts)
 
 
 @app.post("/api/admin/teachers/<tid>")
-def admin_set_paid(tid):
+def admin_update(tid):
     if not is_admin():
-        return jsonify(error="관리자 비밀번호가 올바르지 않습니다."), 401
-    day = str((request.get_json(silent=True) or {}).get("paid_until", ""))
-    if not re.fullmatch(r"[0-9a-f-]{36}", tid) or (day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)):
+        return jsonify(error="관리자만 쓸 수 있습니다."), 403
+    if not re.fullmatch(r"[0-9a-f-]{36}", tid):
         return jsonify(error="형식이 올바르지 않습니다."), 400
-    sb("PATCH", f"/rest/v1/teachers?id=eq.{tid}", json={"paid_until": f"{day}T23:59:59+09:00" if day else None})
+    d = request.get_json(silent=True) or {}
+    act, upd = d.get("action"), {}
+    if act == "extend":
+        if d.get("months") not in (1, 3, 12):
+            return jsonify(error="기간이 올바르지 않습니다."), 400
+        rows = sb("GET", "/rest/v1/teachers", params={"id": f"eq.{tid}", "select": "paid_until"}).json()
+        if not rows:
+            return jsonify(error="선생님을 찾을 수 없습니다."), 404
+        base = datetime.now(KST)  # 만료됐거나 처음이면 오늘부터, 사용 중이면 남은 기간 뒤에 더함
+        if rows[0]["paid_until"]:
+            base = max(base, datetime.fromisoformat(rows[0]["paid_until"].replace("Z", "+00:00")).astimezone(KST))
+        upd["paid_until"] = add_months(base, d["months"]).replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+    elif act == "set":
+        day = str(d.get("date", ""))
+        if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            return jsonify(error="날짜 형식이 올바르지 않습니다."), 400
+        upd["paid_until"] = f"{day}T23:59:59+09:00" if day else None
+    elif act == "stop":
+        upd["paid_until"] = datetime.now(KST).isoformat()
+    elif act == "memo":
+        upd["memo"] = str(d.get("memo", ""))[:300]
+    else:
+        return jsonify(error="알 수 없는 요청입니다."), 400
+    sb("PATCH", f"/rest/v1/teachers?id=eq.{tid}", json=upd)
     return jsonify(ok=True)
 
 
