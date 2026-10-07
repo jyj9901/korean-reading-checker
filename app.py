@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 import requests
 from flask import Flask, Response, jsonify, request, send_from_directory
 from openai import OpenAI
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__, static_folder="public")
 # 기본은 OpenAI. Groq 등 OpenAI 호환 서비스를 쓰려면 환경 변수만 바꾸면 됩니다.
@@ -114,6 +114,39 @@ def sb(method, path, **kw):
     return r
 
 
+def me():
+    """로그인한 선생님 (user, profile). 토큰이 없거나 틀리면 (None, None)"""
+    tok = request.headers.get("Authorization", "")
+    tok = tok[7:].strip() if tok.startswith("Bearer ") else ""
+    if not tok:
+        return None, None
+    r = requests.get(f"{SB_URL}/auth/v1/user", timeout=10,
+                     headers={"apikey": SB_ANON or SB_KEY, "Authorization": f"Bearer {tok}"})
+    if r.status_code != 200:
+        return None, None
+    u = r.json()
+    rows = sb("GET", "/rest/v1/teachers", params={"id": f"eq.{u['id']}", "select": "*"}).json()
+    return u, (rows[0] if rows else None)
+
+
+def active(p):
+    try:
+        return datetime.fromisoformat(p["paid_until"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
+def my_class_ids(u):
+    rows = sb("GET", "/rest/v1/classes", params={"teacher_id": f"eq.{u['id']}", "select": "id"}).json()
+    return [r["id"] for r in rows]
+
+
+def owns(u, aid):
+    ids = my_class_ids(u)
+    return bool(ids) and bool(sb("GET", "/rest/v1/assignments", params={
+        "id": f"eq.{aid}", "class_id": "in.(" + ",".join(map(str, ids)) + ")", "select": "id"}).json())
+
+
 def admin_user(u):
     """ADMIN_EMAILS(쉼표로 구분)에 있고, 이메일 인증이 끝난 계정만 관리자"""
     emails = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
@@ -144,6 +177,14 @@ def find_assignment(code):
 @app.errorhandler(requests.RequestException)
 def db_error(e):
     return jsonify(error="데이터베이스 오류가 발생했습니다."), 500
+
+
+@app.errorhandler(Exception)
+def any_error(e):  # 예상 못 한 오류도 화면에 이유가 보이도록 JSON으로 돌려줌
+    if isinstance(e, HTTPException):
+        return (jsonify(error=f"{e.code} {e.name}"), e.code) if request.path.startswith("/api/") else e
+    app.logger.exception(e)
+    return jsonify(error=f"서버 오류: {type(e).__name__}: {e}"), 500
 
 
 @app.get("/teacher")
