@@ -2,6 +2,7 @@ import os
 import re
 import secrets
 import uuid
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 import requests
@@ -22,7 +23,8 @@ STT_MODEL = os.getenv("STT_MODEL", "whisper-1")
 
 SB_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-TEACHER_PW = os.getenv("TEACHER_PASSWORD", "")  # 이제 '선생님 가입 코드'(반 등록용)로 사용
+TEACHER_PW = os.getenv("TEACHER_PASSWORD", "")  # 관리자 비밀번호(선생님 사용 기간 관리용)
+SB_ANON = os.getenv("SUPABASE_ANON_KEY", "")
 
 # 발음형 변환(선택): pip install g2pk 가 되어 있으면 자동 사용
 try:
@@ -111,25 +113,54 @@ def sb(method, path, **kw):
     return r
 
 
-def teacher_class():
-    """헤더의 반 ID + 비밀번호가 맞으면 그 반 정보를 돌려줌"""
-    cid = request.headers.get("X-Class-Id", "")
-    pw = request.headers.get("X-Teacher-Password", "")
-    if not cid.isdigit() or not pw:
-        return None
-    rows = sb("GET", "/rest/v1/classes",
-              params={"id": f"eq.{cid}", "select": "id,pw_hash"}).json()
-    return rows[0] if rows and check_password_hash(rows[0]["pw_hash"], pw) else None
+def is_admin():
+    pw = request.headers.get("X-Admin-Password", "")
+    return bool(TEACHER_PW) and secrets.compare_digest(pw.encode(), TEACHER_PW.encode())
 
 
-def owns(c, aid):
-    """이 숙제가 로그인한 반의 숙제인지"""
-    return bool(sb("GET", "/rest/v1/assignments", params={
-        "id": f"eq.{aid}", "class_id": f"eq.{c['id']}", "select": "id"}).json())
+def me():
+    """로그인한 선생님 (user, profile). 토큰이 없거나 틀리면 (None, None)"""
+    tok = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not tok:
+        return None, None
+    r = requests.get(f"{SB_URL}/auth/v1/user", timeout=10,
+                     headers={"apikey": SB_ANON or SB_KEY, "Authorization": f"Bearer {tok}"})
+    if r.status_code != 200:
+        return None, None
+    u = r.json()
+    rows = sb("GET", "/rest/v1/teachers", params={"id": f"eq.{u['id']}", "select": "*"}).json()
+    return u, (rows[0] if rows else None)
+
+
+def active(p):
+    try:
+        return datetime.fromisoformat(p["paid_until"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
+def my_class_ids(u):
+    rows = sb("GET", "/rest/v1/classes", params={"teacher_id": f"eq.{u['id']}", "select": "id"}).json()
+    return [r["id"] for r in rows]
+
+
+def owns(u, aid):
+    ids = my_class_ids(u)
+    return bool(ids) and bool(sb("GET", "/rest/v1/assignments", params={
+        "id": f"eq.{aid}", "class_id": "in.(" + ",".join(map(str, ids)) + ")", "select": "id"}).json())
+
+
+def is_admin():
+    pw = request.headers.get("X-Admin-Password", "")
+    return bool(TEACHER_PW) and secrets.compare_digest(pw.encode(), TEACHER_PW.encode())
 
 
 def deny():
-    return jsonify(error="선생님 비밀번호가 올바르지 않습니다."), 401
+    return jsonify(error="로그인이 필요합니다."), 401
+
+
+def not_paid():
+    return jsonify(error="사용 기간이 아닙니다. 관리자에게 문의하세요."), 402
 
 
 def find_assignment(code):
@@ -189,40 +220,74 @@ def submit():
     return jsonify(transcript=hyp, score=score, marks=mark(a["sentence"], hyp))
 
 
+@app.get("/api/config")
+def config():
+    return jsonify(url=SB_URL, key=SB_ANON)
+
+
+@app.get("/api/me")
+def get_me():
+    u, p = me()
+    if not u:
+        return deny()
+    return jsonify(email=u.get("email"), profile=p, active=bool(p) and active(p))
+
+
+@app.post("/api/me")
+def save_me():
+    u, p = me()
+    if not u:
+        return deny()
+    d = request.get_json(silent=True) or {}
+    name = " ".join(str(d.get("name", "")).split())[:40]
+    school = " ".join(str(d.get("school", "")).split())[:60]
+    if not name or not school:
+        return jsonify(error="이름과 학교를 입력하세요."), 400
+    if p:
+        sb("PATCH", f"/rest/v1/teachers?id=eq.{u['id']}", json={"name": name, "school": school})
+    else:
+        sb("POST", "/rest/v1/teachers", json={"id": u["id"], "email": u.get("email"), "name": name, "school": school})
+    return jsonify(ok=True)
+
+
 @app.get("/api/classes")
-def list_classes():
+def list_classes():  # 학생용 공개 목록 (선생님이 만든 반만)
     return jsonify(sb("GET", "/rest/v1/classes", params={
-        "select": "id,school,grade,class_no", "order": "school.asc,grade.asc,class_no.asc"}).json())
+        "teacher_id": "not.is.null", "select": "id,school,grade,class_no",
+        "order": "school.asc,grade.asc,class_no.asc"}).json())
+
+
+@app.get("/api/my/classes")
+def my_classes():
+    u, p = me()
+    if not p:
+        return deny()
+    return jsonify(sb("GET", "/rest/v1/classes", params={
+        "teacher_id": f"eq.{u['id']}", "select": "id,school,grade,class_no", "order": "grade.asc,class_no.asc"}).json())
 
 
 @app.post("/api/classes")
-def register_class():
+def create_class():
+    u, p = me()
+    if not p:
+        return deny()
+    if not active(p):
+        return not_paid()
     d = request.get_json(silent=True) or {}
-    code = str(d.get("signup_code", ""))
-    if not (TEACHER_PW and secrets.compare_digest(code.encode(), TEACHER_PW.encode())):
-        return jsonify(error="가입 코드가 올바르지 않습니다."), 401
-    school = " ".join(str(d.get("school", "")).split())[:60]
-    pw = str(d.get("password", ""))
     try:
         grade, no = int(d.get("grade")), int(d.get("class_no"))
     except (TypeError, ValueError):
         return jsonify(error="학년과 반은 숫자로 입력하세요."), 400
-    if not school or len(pw) < 4 or not (1 <= grade <= 12 and 1 <= no <= 99):
-        return jsonify(error="학교, 학년(1~12), 반(1~99), 비밀번호(4자 이상)를 확인하세요."), 400
-    key = re.sub(r"\s+", "", school).lower()
+    if not (1 <= grade <= 12 and 1 <= no <= 99):
+        return jsonify(error="학년(1~12), 반(1~99)을 확인하세요."), 400
+    key = re.sub(r"\s+", "", p["school"]).lower()
     if sb("GET", "/rest/v1/classes", params={"school_key": f"eq.{key}", "grade": f"eq.{grade}",
                                               "class_no": f"eq.{no}", "select": "id"}).json():
         return jsonify(error="이미 등록된 반입니다."), 409
     row = sb("POST", "/rest/v1/classes", json={
-        "school": school, "school_key": key, "grade": grade, "class_no": no,
-        "pw_hash": generate_password_hash(pw)}, headers={"Prefer": "return=representation"}).json()[0]
-    return jsonify(id=row["id"], school=school)
-
-
-@app.post("/api/login")
-def login():
-    c = teacher_class()
-    return jsonify(id=c["id"]) if c else deny()
+        "school": p["school"], "school_key": key, "grade": grade, "class_no": no, "teacher_id": u["id"]},
+        headers={"Prefer": "return=representation"}).json()[0]
+    return jsonify(id=row["id"])
 
 
 @app.get("/api/class/<int:cid>/assignments")
@@ -233,36 +298,44 @@ def class_assignments(cid):
 
 @app.post("/api/assignments")
 def create_assignment():
-    c = teacher_class()
-    if not c:
+    u, p = me()
+    if not p:
         return deny()
+    if not active(p):
+        return not_paid()
     d = request.get_json(silent=True) or {}
-    title, sentence = d.get("title", "").strip(), d.get("sentence", "").strip()
-    if not title or not sentence:
-        return jsonify(error="제목과 문장을 입력하세요."), 400
+    title, sentence = str(d.get("title", "")).strip(), str(d.get("sentence", "")).strip()
+    try:
+        cid = int(d.get("class_id"))
+    except (TypeError, ValueError):
+        cid = None
+    if not title or not sentence or cid not in my_class_ids(u):
+        return jsonify(error="반, 제목, 문장을 확인하세요."), 400
     row = sb("POST", "/rest/v1/assignments",
-             json={"code": secrets.token_hex(3).upper(), "title": title, "sentence": sentence,
-                   "class_id": c["id"]},
+             json={"code": secrets.token_hex(3).upper(), "title": title, "sentence": sentence, "class_id": cid},
              headers={"Prefer": "return=representation"}).json()[0]
     return jsonify(row)
 
 
 @app.get("/api/assignments")
 def list_assignments():
-    c = teacher_class()
-    if not c:
+    u, p = me()
+    if not p:
         return deny()
+    ids = my_class_ids(u)
+    if not ids:
+        return jsonify([])
     return jsonify(sb("GET", "/rest/v1/assignments", params={
-        "select": "*", "class_id": f"eq.{c['id']}", "order": "created_at.desc"}).json())
+        "select": "*", "class_id": "in.(" + ",".join(map(str, ids)) + ")", "order": "created_at.desc"}).json())
 
 
 @app.get("/api/submissions")
 def list_submissions():
-    c = teacher_class()
-    if not c:
+    u, p = me()
+    if not p:
         return deny()
     aid = request.args.get("assignment_id", "")
-    if not aid.isdigit() or not owns(c, aid):
+    if not aid.isdigit() or not owns(u, aid):
         return jsonify([])
     return jsonify(sb("GET", "/rest/v1/submissions", params={
         "select": "id,student,score,transcript,audio_path,created_at",
@@ -271,17 +344,36 @@ def list_submissions():
 
 @app.get("/api/audio/<int:sid>")
 def get_audio(sid):
-    c = teacher_class()
-    if not c:
+    u, p = me()
+    if not p:
         return deny()
     rows = sb("GET", "/rest/v1/submissions",
               params={"id": f"eq.{sid}", "select": "audio_path,assignment_id"}).json()
-    if not rows or not rows[0]["audio_path"] or not owns(c, rows[0]["assignment_id"]):
+    if not rows or not rows[0]["audio_path"] or not owns(u, rows[0]["assignment_id"]):
         return jsonify(error="저장된 녹음이 없습니다."), 404
-    p = rows[0]["audio_path"]
-    r = sb("GET", f"/storage/v1/object/recordings/{p}")
-    mime = {"mp4": "audio/mp4", "ogg": "audio/ogg"}.get(p.rsplit(".", 1)[-1], "audio/webm")
+    path = rows[0]["audio_path"]
+    r = sb("GET", f"/storage/v1/object/recordings/{path}")
+    mime = {"mp4": "audio/mp4", "ogg": "audio/ogg"}.get(path.rsplit(".", 1)[-1], "audio/webm")
     return Response(r.content, mimetype=mime)
+
+
+@app.get("/api/admin/teachers")
+def admin_teachers():
+    if not is_admin():
+        return jsonify(error="관리자 비밀번호가 올바르지 않습니다."), 401
+    return jsonify(sb("GET", "/rest/v1/teachers", params={
+        "select": "id,email,name,school,paid_until", "order": "created_at.desc"}).json())
+
+
+@app.post("/api/admin/teachers/<tid>")
+def admin_set_paid(tid):
+    if not is_admin():
+        return jsonify(error="관리자 비밀번호가 올바르지 않습니다."), 401
+    day = str((request.get_json(silent=True) or {}).get("paid_until", ""))
+    if not re.fullmatch(r"[0-9a-f-]{36}", tid) or (day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)):
+        return jsonify(error="형식이 올바르지 않습니다."), 400
+    sb("PATCH", f"/rest/v1/teachers?id=eq.{tid}", json={"paid_until": f"{day}T23:59:59+09:00" if day else None})
+    return jsonify(ok=True)
 
 
 if __name__ == "__main__":
