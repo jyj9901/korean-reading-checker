@@ -108,6 +108,8 @@
   }
 .st { display: inline-block; border-radius: 6px; padding: 0 .5rem; font-size: .8rem; font-weight: 700; color: #fff; margin-left: .3rem; }
   .st.ok { background: #1f9d6b; } .st.soon { background: #b7791f; } .st.exp { background: #d6453d; } .st.none { background: #6b7394; }
+  #h-admin:hover:not(:disabled) { color: var(--brand); background: none; }
+  #c-status { margin-bottom: .8rem; }
 </style>
 </head>
 <body>
@@ -148,6 +150,7 @@
       <p id="h-t-status" class="status err" role="status"></p>
     </div>
   </div>
+<p style="text-align:center;margin:1.4rem 0 0"><button id="h-admin" class="link" style="color:var(--sub)">관리자</button></p>
 </section>
 
 <section id="student" hidden>
@@ -334,6 +337,7 @@ async function enterTeacher() {
     : "사용 기간이 아닙니다. 결제 확인 후 관리자가 열어 드립니다. (이미 받은 결과는 볼 수 있어요)";
   show("teacher");
   if (me.profile) await loadMine();
+  if (localStorage.getItem("wantAdmin")) { localStorage.removeItem("wantAdmin"); if (me.is_admin) openAdmin(); }
 }
 async function loadMine() {
   CL = await api("/api/my/classes");
@@ -430,6 +434,19 @@ $("a-list").onclick = async e => {
   if (act === "stop" && !confirm("사용을 중지할까요?")) return;
   try { await api("/api/admin/teachers/" + id, { method: "POST", body: JSON.stringify(body) }); say("a-status", "저장했습니다."); await loadAdmin(); }
   catch (err) { say("a-status", err.message, true); }
+};
+$("h-admin").onclick = async () => {
+  try {
+    const s = await sbClient();
+    if ((await s.auth.getSession()).data.session) {
+      await enterTeacher();
+      if (!$("t-admin").hidden) openAdmin(); else say("t-status", "관리자 계정이 아닙니다.", true);
+      return;
+    }
+  } catch (e) {}
+  localStorage.setItem("wantAdmin", "1");
+  say("h-t-status", "관리자 이메일로 로그인해 주세요.");
+  $("h-email").focus();
 };
 </script>
 </body>
