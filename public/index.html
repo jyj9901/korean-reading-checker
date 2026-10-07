@@ -150,7 +150,7 @@
       <p id="h-t-status" class="status err" role="status"></p>
     </div>
   </div>
-<p style="text-align:center;margin:1.4rem 0 0"><button id="h-admin" class="link" style="color:var(--sub)">관리자</button></p>
+<p style="text-align:center;margin:1.4rem 0 0"><button id="h-admin" class="link" style="color:var(--sub)">관리자</button><br><span id="h-a-status" class="status" role="status"></span></p>
 </section>
 
 <section id="student" hidden>
@@ -436,17 +436,19 @@ $("a-list").onclick = async e => {
   catch (err) { say("a-status", err.message, true); }
 };
 $("h-admin").onclick = async () => {
+  say("h-a-status", "확인 중...");
   try {
     const s = await sbClient();
     if ((await s.auth.getSession()).data.session) {
       await enterTeacher();
-      if (!$("t-admin").hidden) openAdmin(); else say("t-status", "관리자 계정이 아닙니다.", true);
+      if (!$("t-admin").hidden) { say("h-a-status", ""); openAdmin(); }
+      else alert("이 계정은 관리자가 아닙니다. 관리자 이메일(Vercel의 ADMIN_EMAILS)로 로그인했는지 확인하세요.");
       return;
     }
-  } catch (e) {}
-  localStorage.setItem("wantAdmin", "1");
-  say("h-t-status", "관리자 이메일로 로그인해 주세요.");
-  $("h-email").focus();
+    localStorage.setItem("wantAdmin", "1");
+    say("h-a-status", "위 선생님 카드에서 관리자 이메일로 로그인해 주세요.");
+    $("h-email").focus();
+  } catch (e) { say("h-a-status", "오류: " + e.message, true); }
 };
 </script>
 </body>
