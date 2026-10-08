@@ -224,6 +224,7 @@ def get_assignment(code):
 def submit():
     a = find_assignment(request.form.get("code"))
     student = request.form.get("student", "").strip()[:50]
+    student_no = re.sub(r"\s+", "", request.form.get("student_no", ""))[:20]
     f = request.files.get("audio")
     if not a:
         return jsonify(error="숙제 코드를 찾을 수 없습니다."), 404
@@ -245,7 +246,7 @@ def submit():
     except requests.RequestException:
         path = None  # 녹음 저장이 실패해도 점수는 기록
     sb("POST", "/rest/v1/submissions", json={
-        "assignment_id": a["id"], "student": student,
+        "assignment_id": a["id"], "student": student, "student_no": student_no or None,
         "score": score, "transcript": hyp, "audio_path": path})
     return jsonify(transcript=hyp, score=score, marks=mark(a["sentence"], hyp))
 
@@ -390,7 +391,7 @@ def list_submissions():
     if not aid.isdigit() or not owns(u, aid):
         return jsonify([])
     return jsonify(sb("GET", "/rest/v1/submissions", params={
-        "select": "id,student,score,transcript,audio_path,created_at",
+        "select": "id,student_no,student,score,transcript,audio_path,created_at",
         "assignment_id": f"eq.{aid}", "order": "created_at.desc"}).json())
 
 
