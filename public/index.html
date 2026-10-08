@@ -161,6 +161,8 @@
   <div class="panel" id="s-task" hidden>
     <h2 id="s-title"></h2>
     <p id="sentence"></p>
+    <label for="s-no">학번 / 学号 <span class="sub">(선택 / 选填)</span></label>
+    <input id="s-no" maxlength="20" autocomplete="off">
     <label for="s-name">이름 / 姓名</label>
     <input id="s-name" maxlength="50">
     <div class="btns">
@@ -279,7 +281,7 @@ $("stop").onclick = () => { recorder.stop(); $("rec").disabled = false; $("stop"
 $("send").onclick = async () => {
   const student = $("s-name").value.trim();
   if (!student) { say("s-status", "이름을 입력하세요. / 请输入姓名。", true); return; }
-  const fd = new FormData(); fd.append("code", CODE); fd.append("student", student); fd.append("audio", blob, "rec");
+  const fd = new FormData(); fd.append("code", CODE); fd.append("student", student); fd.append("student_no", $("s-no").value.trim()); fd.append("audio", blob, "rec");
   $("send").disabled = true; say("s-status", "채점 중... / 评分中...");
   try {
     const res = await fetch("/api/submit", { method: "POST", body: fd });
@@ -371,7 +373,7 @@ $("list").onclick = async e => {
   try {
     const rows = await api("/api/submissions?assignment_id=" + id);
     $("rh").textContent = e.target.dataset.title + " — 제출 " + rows.length + "건";
-    $("results").innerHTML = "<tr><th>이름</th><th>점수</th><th>시간</th><th>인식 결과</th><th>녹음</th></tr>" + rows.map(r => `<tr><td>${esc(r.student)}</td><td>${esc(r.score)}%</td><td>${esc(new Date(r.created_at).toLocaleString("ko-KR"))}</td><td>${esc(r.transcript)}</td><td>${r.audio_path ? `<button class="ghost" data-play="${r.id}">▶</button>` : "-"}</td></tr>`).join("");
+    $("results").innerHTML = "<tr><th>학번</th><th>이름</th><th>점수</th><th>시간</th><th>인식 결과</th><th>녹음</th></tr>" + rows.map(r => `<tr><td>${esc(r.student_no || "-")}</td><td>${esc(r.student)}</td><td>${esc(r.score)}%</td><td>${esc(new Date(r.created_at).toLocaleString("ko-KR"))}</td><td>${esc(r.transcript)}</td><td>${r.audio_path ? `<button class="ghost" data-play="${r.id}">▶</button>` : "-"}</td></tr>`).join("");
     $("rpanel").hidden = false; $("rpanel").scrollIntoView({ behavior: "smooth" });
   } catch (err) { tErr(err); }
 };
