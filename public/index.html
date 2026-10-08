@@ -131,12 +131,9 @@
   <div class="doors">
     <div class="door">
       <h2>학생 <span class="sub">学生</span></h2>
-      <p class="sub">학교·학년·반을 고르세요. 로그인은 필요 없어요.<br>选择班级即可，无需登录。</p>
-      <div class="pick">
-        <div><label for="c-school">학교 / 学校</label><select id="c-school"></select></div>
-        <div><label for="c-grade">학년 / 年级</label><select id="c-grade"></select></div>
-        <div><label for="c-no">반 / 班</label><select id="c-no"></select></div>
-      </div>
+      <p class="sub">선생님이 알려준 반 코드를 입력하세요. 로그인은 필요 없어요.<br>请输入老师给的班级码，无需登录。</p>
+      <label for="c-code">반 코드 / 班级码</label>
+      <input id="c-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="예: K7M2QX" style="text-transform:uppercase;letter-spacing:.2em;font-weight:700">
       <p id="c-status" class="status err" role="status"></p>
       <button id="h-start">과제 보기 / 查看作业</button>
     </div>
@@ -192,7 +189,7 @@
     <div class="panel"><b id="t-hello"></b><p id="t-plan" class="sub" style="margin:.3rem 0 0"></p></div>
     <div class="panel">
       <h2>내 반</h2>
-      <p id="t-classes" class="sub"></p>
+      <div id="t-classes"></div>
       <div class="pick" style="grid-template-columns:1fr 1fr auto;align-items:end">
         <div><label for="t-grade">학년</label><input id="t-grade" type="number" min="1" max="12"></div>
         <div><label for="t-no">반</label><input id="t-no" type="number" min="1" max="99"></div>
@@ -235,36 +232,19 @@ $("theme").onclick = () => { root.dataset.theme = root.dataset.theme === "dark" 
 paintTheme();
 document.querySelectorAll(".back").forEach(b => b.onclick = () => show("home"));
 
-/* ---------- 학생: 반 선택 ---------- */
-let CLASSES = [];
-const label = c => `${c.school} ${c.grade}학년 ${c.class_no}반`;
-const uniq = a => [...new Set(a)];
-const fill = (id, vals, fmt = v => v) => $(id).innerHTML = vals.map(v => `<option value="${esc(v)}">${esc(fmt(v))}</option>`).join("");
-const cur = () => CLASSES.find(c => c.school === $("c-school").value && String(c.grade) === $("c-grade").value && String(c.class_no) === $("c-no").value);
-const onSchool = () => { fill("c-grade", uniq(CLASSES.filter(c => c.school === $("c-school").value).map(c => c.grade)), g => g + "학년"); onGrade(); };
-const onGrade = () => fill("c-no", CLASSES.filter(c => c.school === $("c-school").value && String(c.grade) === $("c-grade").value).map(c => c.class_no), n => n + "반");
-async function loadClasses() {
-  try { CLASSES = await (await fetch("/api/classes")).json(); } catch (e) { CLASSES = []; }
-  if (!Array.isArray(CLASSES)) CLASSES = [];
-  fill("c-school", uniq(CLASSES.map(c => c.school))); onSchool();
-  if (!CLASSES.length) say("c-status", "아직 등록된 반이 없습니다. / 暂无班级。");
-}
-$("c-school").onchange = onSchool; $("c-grade").onchange = onGrade;
-loadClasses();
-
 /* ---------- 학생: 과제·녹음 ---------- */
 let recorder, chunks = [], blob, CODE = "";
 const sErr = m => say($("student").hidden ? "c-status" : "s-lstatus", m, true);
 async function openList() {
-  const c = cur();
-  if (!c) { say("c-status", "먼저 학교·학년·반을 선택하세요. / 请先选择班级。", true); return; }
+  const k = $("c-code").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (k.length !== 6) { say("c-status", "반 코드 6자리를 입력하세요. / 请输入6位班级码。", true); return; }
   say("c-status", "불러오는 중... / 加载中...");
   try {
-    const res = await fetch(`/api/class/${c.id}/assignments`);
-    const rows = await res.json();
-    if (!res.ok) throw new Error(rows.error || "오류");
-    $("s-class").textContent = label(c);
-    $("s-items").innerHTML = rows.map(a => `<button class="ghost item-btn" data-code="${esc(a.code)}">${esc(a.title)}</button>`).join("") || "<p class='sub'>아직 과제가 없습니다. / 暂无作业。</p>";
+    const res = await fetch("/api/join/" + encodeURIComponent(k));
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "오류");
+    $("s-class").textContent = d.label;
+    $("s-items").innerHTML = d.assignments.map(a => `<button class="ghost item-btn" data-code="${esc(a.code)}">${esc(a.title)}</button>`).join("") || "<p class='sub'>아직 과제가 없습니다. / 暂无作业。</p>";
     $("s-list").hidden = false; $("s-task").hidden = true; $("result").hidden = true;
     say("c-status", ""); say("s-lstatus", ""); show("student");
   } catch (e) { say("c-status", e.message, true); }
@@ -279,6 +259,7 @@ async function openStudent(code) {
   } catch (e) { sErr(e.message); }
 }
 $("h-start").onclick = openList;
+$("c-code").onkeydown = e => { if (e.key === "Enter") openList(); };
 $("s-items").onclick = e => { if (e.target.dataset.code) openStudent(e.target.dataset.code); };
 $("rec").onclick = async () => {
   try {
@@ -311,7 +292,8 @@ $("send").onclick = async () => {
   $("send").disabled = false;
 };
 const Q = new URLSearchParams(location.search);
-if (Q.get("c")) openStudent(Q.get("c").trim().toUpperCase());  // 기존 학생 링크 호환
+if (Q.get("c")) openStudent(Q.get("c").trim().toUpperCase());  // 기존 과제 링크 호환
+if (Q.get("class")) { $("c-code").value = Q.get("class").trim().toUpperCase(); openList(); }  // 반 링크
 
 /* ---------- 선생님 (로그인 모듈은 선생님이 쓸 때만 불러옴) ---------- */
 let SB = null, CL = [];
@@ -343,11 +325,25 @@ async function loadMine() {
   CL = await api("/api/my/classes");
   const n = c => `${c.grade}학년 ${c.class_no}반`;
   $("t-class").innerHTML = CL.map(c => `<option value="${c.id}">${esc(n(c))}</option>`).join("");
-  $("t-classes").textContent = CL.length ? CL.map(n).join(" · ") : "아직 만든 반이 없습니다. 아래에서 추가하세요.";
+  $("t-classes").innerHTML = CL.map(c => `<div class="item"><b>${esc(n(c))}</b> <span class="code">${esc(c.join_code)}</span><br><button class="ghost" data-copy="${esc(c.join_code)}" style="margin-top:.5rem">학생 링크 복사</button> <button class="ghost" data-regen="${c.id}" style="margin-top:.5rem">코드 다시 만들기</button></div>`).join("") || "<p class='sub'>아직 만든 반이 없습니다. 아래에서 추가하세요.</p>";
   const rows = await api("/api/assignments");
   $("list").innerHTML = rows.map(a => { const c = CL.find(x => x.id === a.class_id); return `<div class="item"><b>${esc(a.title)}</b> <span class="code">${esc(a.code)}</span> <span class="sub">${c ? esc(n(c)) : ""}</span><br>${esc(a.sentence)}<br><button class="ghost" data-id="${a.id}" data-title="${esc(a.title)}" style="margin-top:.5rem">결과 보기</button></div>`; }).join("") || "<p class='sub'>아직 과제가 없습니다.</p>";
 }
 const tErr = e => say("t-status", e.message, true);
+$("t-classes").onclick = async e => {
+  const t = e.target;
+  try {
+    if (t.dataset.copy) {
+      const url = `${location.origin}/?class=${t.dataset.copy}`;
+      try { await navigator.clipboard.writeText(url); say("t-status", "링크를 복사했습니다. 학생들에게 보내세요."); }
+      catch (_) { prompt("이 링크를 복사해서 학생들에게 보내세요.", url); }
+    } else if (t.dataset.regen) {
+      if (!confirm("코드를 새로 만들면 이전 코드와 링크는 더 이상 쓸 수 없습니다. 계속할까요?")) return;
+      await api(`/api/classes/${t.dataset.regen}/code`, { method: "POST" });
+      say("t-status", "새 코드를 만들었습니다. 학생들에게 새 코드를 알려 주세요."); await loadMine();
+    }
+  } catch (err) { tErr(err); }
+};
 const authDone = async (error, ok) => { if (error) { say("h-t-status", error.message, true); return; } if (ok) await ok(); };
 $("g-login").onclick = async () => { try { await (await sbClient()).auth.signInWithOAuth({ provider: "google", options: { redirectTo: location.origin } }); } catch (e) { say("h-t-status", e.message, true); } };
 $("h-login").onclick = async () => {
@@ -390,7 +386,7 @@ $("results").onclick = async e => {
 const WANT_ADMIN = location.hash === "#admin";
 // 로그인 상태이거나 구글/이메일 로그인에서 돌아온 경우 자동으로 선생님 화면으로
 try {
-  if (!Q.get("c") && (Q.has("code") || location.hash === "#teacher" || WANT_ADMIN || Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k)))) {
+  if (!Q.get("c") && !Q.get("class") && (Q.has("code") || location.hash === "#teacher" || WANT_ADMIN || Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k)))) {
     sbClient().then(async s => { if ((await s.auth.getSession()).data.session) { history.replaceState(null, "", location.pathname); await enterTeacher(); if (WANT_ADMIN && !$("t-admin").hidden) openAdmin(); } }).catch(() => {});
   }
 } catch (e) {}
