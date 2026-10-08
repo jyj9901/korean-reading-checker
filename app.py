@@ -165,6 +165,26 @@ def not_paid():
     return jsonify(error="사용 기간이 아닙니다. 관리자에게 문의하세요."), 402
 
 
+CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 헷갈리는 글자(0/O, 1/I/L) 제외
+
+
+def new_code():
+    return "".join(secrets.choice(CODE_CHARS) for _ in range(6))
+
+
+def assign_code(cid):
+    """반에 새 입장 코드를 부여(겹치면 다시 시도)"""
+    for _ in range(5):
+        code = new_code()
+        try:
+            sb("PATCH", f"/rest/v1/classes?id=eq.{cid}", json={"join_code": code})
+            return code
+        except requests.HTTPError as e:
+            if e.response is None or e.response.status_code != 409:
+                raise
+    raise RuntimeError("반 코드를 만들지 못했습니다.")
+
+
 def find_assignment(code):
     code = (code or "").strip().upper()
     if not re.fullmatch(r"[A-Z0-9]{6}", code):
@@ -260,20 +280,18 @@ def save_me():
     return jsonify(ok=True)
 
 
-@app.get("/api/classes")
-def list_classes():  # 학생용 공개 목록 (선생님이 만든 반만)
-    return jsonify(sb("GET", "/rest/v1/classes", params={
-        "teacher_id": "not.is.null", "select": "id,school,grade,class_no",
-        "order": "school.asc,grade.asc,class_no.asc"}).json())
-
-
 @app.get("/api/my/classes")
 def my_classes():
     u, p = me()
     if not p:
         return deny()
-    return jsonify(sb("GET", "/rest/v1/classes", params={
-        "teacher_id": f"eq.{u['id']}", "select": "id,school,grade,class_no", "order": "grade.asc,class_no.asc"}).json())
+    rows = sb("GET", "/rest/v1/classes", params={
+        "teacher_id": f"eq.{u['id']}", "select": "id,school,grade,class_no,join_code",
+        "order": "grade.asc,class_no.asc"}).json()
+    for r in rows:
+        if not r.get("join_code"):  # 코드 도입 전에 만든 반
+            r["join_code"] = assign_code(r["id"])
+    return jsonify(rows)
 
 
 @app.post("/api/classes")
@@ -294,16 +312,40 @@ def create_class():
     if sb("GET", "/rest/v1/classes", params={"school_key": f"eq.{key}", "grade": f"eq.{grade}",
                                               "class_no": f"eq.{no}", "select": "id"}).json():
         return jsonify(error="이미 등록된 반입니다."), 409
-    row = sb("POST", "/rest/v1/classes", json={
-        "school": p["school"], "school_key": key, "grade": grade, "class_no": no, "teacher_id": u["id"]},
-        headers={"Prefer": "return=representation"}).json()[0]
-    return jsonify(id=row["id"])
+    for _ in range(5):
+        try:
+            row = sb("POST", "/rest/v1/classes", json={
+                "school": p["school"], "school_key": key, "grade": grade, "class_no": no,
+                "teacher_id": u["id"], "join_code": new_code()},
+                headers={"Prefer": "return=representation"}).json()[0]
+            return jsonify(id=row["id"])
+        except requests.HTTPError as e:
+            if e.response is None or e.response.status_code != 409:
+                raise
+    return jsonify(error="반 코드를 만들지 못했습니다. 다시 시도하세요."), 500
 
 
-@app.get("/api/class/<int:cid>/assignments")
-def class_assignments(cid):
-    return jsonify(sb("GET", "/rest/v1/assignments", params={
-        "class_id": f"eq.{cid}", "select": "code,title", "order": "created_at.desc"}).json())
+@app.post("/api/classes/<int:cid>/code")
+def regen_code(cid):  # 코드가 새어 나갔거나 학기가 바뀔 때 새 코드로 교체
+    u, p = me()
+    if not p:
+        return deny()
+    if cid not in my_class_ids(u):
+        return jsonify(error="내 반이 아닙니다."), 404
+    return jsonify(join_code=assign_code(cid))
+
+
+@app.get("/api/join/<code>")
+def join_class(code):  # 학생: 반 코드로 입장 (목록 공개 없음)
+    code = code.strip().upper()
+    rows = [] if not re.fullmatch(r"[A-Z0-9]{6}", code) else sb("GET", "/rest/v1/classes", params={
+        "join_code": f"eq.{code}", "teacher_id": "not.is.null", "select": "id,school,grade,class_no"}).json()
+    if not rows:
+        return jsonify(error="반 코드를 찾을 수 없습니다. / 找不到班级码。"), 404
+    c = rows[0]
+    asg = sb("GET", "/rest/v1/assignments", params={
+        "class_id": f"eq.{c['id']}", "select": "code,title", "order": "created_at.desc"}).json()
+    return jsonify(label=f"{c['school']} {c['grade']}학년 {c['class_no']}반", assignments=asg)
 
 
 @app.post("/api/assignments")
