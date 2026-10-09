@@ -147,6 +147,22 @@ def owns(u, aid):
         "id": f"eq.{aid}", "class_id": "in.(" + ",".join(map(str, ids)) + ")", "select": "id"}).json())
 
 
+def drop_assignments(ids):
+    """과제와 그 제출 기록·녹음 파일을 모두 삭제"""
+    if not ids:
+        return
+    inl = "in.(" + ",".join(str(int(i)) for i in ids) + ")"
+    subs = sb("GET", "/rest/v1/submissions", params={"assignment_id": inl, "select": "audio_path"}).json()
+    paths = [s["audio_path"] for s in subs if s.get("audio_path")]
+    for i in range(0, len(paths), 100):
+        try:
+            sb("DELETE", "/storage/v1/object/recordings", json={"prefixes": paths[i:i + 100]})
+        except requests.RequestException:
+            pass  # 파일 삭제가 실패해도 기록 삭제는 진행
+    sb("DELETE", "/rest/v1/submissions", params={"assignment_id": inl})
+    sb("DELETE", "/rest/v1/assignments", params={"id": inl})
+
+
 def admin_user(u):
     """ADMIN_EMAILS(쉼표로 구분)에 있고, 이메일 인증이 끝난 계정만 관리자"""
     emails = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
@@ -231,6 +247,8 @@ def submit():
     if not student or not f:
         return jsonify(error="이름과 녹음이 필요합니다."), 400
     data, mt = f.read(), f.mimetype or ""
+    if len(data) > 4_000_000:
+        return jsonify(error="녹음이 너무 깁니다. 다시 녹음하세요. / 录音太长，请重新录音。"), 413
     ext = "mp4" if "mp4" in mt else "ogg" if "ogg" in mt else "webm"
     try:
         hyp = client.audio.transcriptions.create(
@@ -334,6 +352,31 @@ def regen_code(cid):  # 코드가 새어 나갔거나 학기가 바뀔 때 새 �
     if cid not in my_class_ids(u):
         return jsonify(error="내 반이 아닙니다."), 404
     return jsonify(join_code=assign_code(cid))
+
+
+@app.delete("/api/assignments/<int:aid>")
+def delete_assignment(aid):
+    u, p = me()
+    if not p:
+        return deny()
+    if not owns(u, aid):
+        return jsonify(error="내 과제가 아닙니다."), 404
+    drop_assignments([aid])
+    return jsonify(ok=True)
+
+
+@app.delete("/api/classes/<int:cid>")
+def delete_class(cid):
+    u, p = me()
+    if not p:
+        return deny()
+    if cid not in my_class_ids(u):
+        return jsonify(error="내 반이 아닙니다."), 404
+    ids = [a["id"] for a in sb("GET", "/rest/v1/assignments", params={
+        "class_id": f"eq.{cid}", "select": "id"}).json()]
+    drop_assignments(ids)
+    sb("DELETE", "/rest/v1/classes", params={"id": f"eq.{cid}"})
+    return jsonify(ok=True)
 
 
 @app.get("/api/join/<code>")
