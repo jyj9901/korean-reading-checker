@@ -95,6 +95,8 @@
 
   .pick { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: .8rem; margin-top: .8rem; }
   .pick select { margin-bottom: 0; }
+  .att { padding: .35rem 0; border-top: 1px solid var(--line); font-size: .9rem; }
+  .att:first-child { border-top: 0; }
   .item-btn { display: block; width: 100%; text-align: left; margin: .5rem 0; }
   .link { background: none; color: var(--d-sub); text-decoration: underline; padding: .3rem 0; font-weight: 500; }
   .link:hover:not(:disabled) { background: none; color: #fff; }
@@ -207,7 +209,7 @@
     </div>
     <p id="t-status" class="status" role="status"></p>
     <div class="panel"><h2>과제 목록</h2><div id="list"></div></div>
-    <div class="panel" id="rpanel" hidden><h2 id="rh"></h2><div class="tbl"><table id="results"></table></div></div>
+    <div class="panel" id="rpanel" hidden><h2 id="rh"></h2><div class="btns"><button id="csv-best" class="ghost">엑셀 저장 (최고 점수)</button><button id="csv-all" class="ghost">엑셀 저장 (전체 기록)</button></div><div class="tbl"><table id="results"></table></div></div>
   </div>
 </section>
 
@@ -237,6 +239,10 @@ document.querySelectorAll(".back").forEach(b => b.onclick = () => show("home"));
 /* ---------- 학생: 과제·녹음 ---------- */
 let recorder, chunks = [], blob, CODE = "";
 const sErr = m => say($("student").hidden ? "c-status" : "s-lstatus", m, true);
+const mem = {
+  get: k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }
+};
 async function openList() {
   const k = $("c-code").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (k.length !== 6) { say("c-status", "반 코드 6자리를 입력하세요. / 请输入6位班级码。", true); return; }
@@ -248,7 +254,7 @@ async function openList() {
     $("s-class").textContent = d.label;
     $("s-items").innerHTML = d.assignments.map(a => `<button class="ghost item-btn" data-code="${esc(a.code)}">${esc(a.title)}</button>`).join("") || "<p class='sub'>아직 과제가 없습니다. / 暂无作业。</p>";
     $("s-list").hidden = false; $("s-task").hidden = true; $("result").hidden = true;
-    say("c-status", ""); say("s-lstatus", ""); show("student");
+    mem.set("ccode", k); say("c-status", ""); say("s-lstatus", ""); show("student");
   } catch (e) { say("c-status", e.message, true); }
 }
 async function openStudent(code) {
@@ -256,6 +262,8 @@ async function openStudent(code) {
     const res = await fetch("/api/assignment/" + encodeURIComponent(code));
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || "오류");
+    if (!$("s-no").value) $("s-no").value = mem.get("sno");
+    if (!$("s-name").value) $("s-name").value = mem.get("sname");
     CODE = code; $("s-title").textContent = d.title; $("sentence").textContent = d.sentence;
     $("result").hidden = true; say("s-status", ""); $("s-list").hidden = true; $("s-task").hidden = false; show("student");
   } catch (e) { sErr(e.message); }
@@ -263,10 +271,17 @@ async function openStudent(code) {
 $("h-start").onclick = openList;
 $("c-code").onkeydown = e => { if (e.key === "Enter") openList(); };
 $("s-items").onclick = e => { if (e.target.dataset.code) openStudent(e.target.dataset.code); };
+const LIMIT = 60; let tick;
+function endRec() {
+  clearInterval(tick);
+  if (recorder && recorder.state === "recording") recorder.stop();
+  $("rec").disabled = false; $("stop").disabled = true;
+}
 $("rec").onclick = async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    chunks = []; recorder = new MediaRecorder(stream);
+    chunks = [];
+    try { recorder = new MediaRecorder(stream, { audioBitsPerSecond: 48000 }); } catch (_) { recorder = new MediaRecorder(stream); }
     recorder.ondataavailable = e => chunks.push(e.data);
     recorder.onstop = () => {
       blob = new Blob(chunks, { type: recorder.mimeType });
@@ -274,19 +289,28 @@ $("rec").onclick = async () => {
       stream.getTracks().forEach(t => t.stop()); $("send").disabled = false;
     };
     recorder.start(); $("rec").disabled = true; $("stop").disabled = false; $("send").disabled = true;
-    say("s-status", "녹음 중... / 录音中...");
+    let left = LIMIT;
+    const msg = () => say("s-status", `녹음 중... 남은 시간 ${left}초 / 录音中... 剩余${left}秒`);
+    msg();
+    tick = setInterval(() => {
+      left--;
+      if (left <= 0) { endRec(); say("s-status", "시간이 다 되어 자동으로 멈췄어요. 들어 보고 제출하세요. / 时间到，已自动停止。请试听后提交。"); }
+      else msg();
+    }, 1000);
   } catch (e) { say("s-status", "마이크를 사용할 수 없습니다. 위챗이 아닌 기본 브라우저에서 열어 주세요. / 无法使用麦克风，请用系统浏览器打开。", true); }
 };
-$("stop").onclick = () => { recorder.stop(); $("rec").disabled = false; $("stop").disabled = true; say("s-status", ""); };
+$("stop").onclick = () => { endRec(); say("s-status", ""); };
 $("send").onclick = async () => {
   const student = $("s-name").value.trim();
   if (!student) { say("s-status", "이름을 입력하세요. / 请输入姓名。", true); return; }
+  if (blob.size > 4e6) { say("s-status", "녹음이 너무 깁니다. 다시 녹음하세요. / 录音太长，请重新录音。", true); return; }
   const fd = new FormData(); fd.append("code", CODE); fd.append("student", student); fd.append("student_no", $("s-no").value.trim()); fd.append("audio", blob, "rec");
   $("send").disabled = true; say("s-status", "채점 중... / 评分中...");
   try {
     const res = await fetch("/api/submit", { method: "POST", body: fd });
-    const d = await res.json();
-    if (!res.ok) throw new Error(d.error || "오류");
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || "제출에 실패했습니다. 다시 시도하세요. / 提交失败，请重试。");
+    mem.set("sno", $("s-no").value.trim()); mem.set("sname", student);
     $("score").textContent = d.score + "%";
     $("marks").innerHTML = d.marks.map(m => m.ok ? esc(m.ch) : `<span class="bad">${esc(m.ch)}</span>`).join("");
     $("transcript").textContent = d.transcript; $("result").hidden = false; say("s-status", "제출 완료! / 提交成功！");
@@ -294,6 +318,7 @@ $("send").onclick = async () => {
   $("send").disabled = false;
 };
 const Q = new URLSearchParams(location.search);
+$("c-code").value = mem.get("ccode");
 if (Q.get("c")) openStudent(Q.get("c").trim().toUpperCase());  // 기존 과제 링크 호환
 if (Q.get("class")) { $("c-code").value = Q.get("class").trim().toUpperCase(); openList(); }  // 반 링크
 
@@ -325,11 +350,11 @@ async function enterTeacher() {
 }
 async function loadMine() {
   CL = await api("/api/my/classes");
+  const rows = await api("/api/assignments");
   const n = c => `${c.grade}학년 ${c.class_no}반`;
   $("t-class").innerHTML = CL.map(c => `<option value="${c.id}">${esc(n(c))}</option>`).join("");
-  $("t-classes").innerHTML = CL.map(c => `<div class="item"><b>${esc(n(c))}</b> <span class="code">${esc(c.join_code)}</span><br><button class="ghost" data-copy="${esc(c.join_code)}" style="margin-top:.5rem">학생 링크 복사</button> <button class="ghost" data-regen="${c.id}" style="margin-top:.5rem">코드 다시 만들기</button></div>`).join("") || "<p class='sub'>아직 만든 반이 없습니다. 아래에서 추가하세요.</p>";
-  const rows = await api("/api/assignments");
-  $("list").innerHTML = rows.map(a => { const c = CL.find(x => x.id === a.class_id); return `<div class="item"><b>${esc(a.title)}</b> <span class="code">${esc(a.code)}</span> <span class="sub">${c ? esc(n(c)) : ""}</span><br>${esc(a.sentence)}<br><button class="ghost" data-id="${a.id}" data-title="${esc(a.title)}" style="margin-top:.5rem">결과 보기</button></div>`; }).join("") || "<p class='sub'>아직 과제가 없습니다.</p>";
+  $("t-classes").innerHTML = CL.map(c => { const cnt = rows.filter(a => a.class_id === c.id).length; return `<div class="item"><b>${esc(n(c))}</b> <span class="code">${esc(c.join_code)}</span> <span class="sub">과제 ${cnt}개</span><br><button class="ghost" data-copy="${esc(c.join_code)}" style="margin-top:.5rem">학생 링크 복사</button> <button class="ghost" data-regen="${c.id}" style="margin-top:.5rem">코드 다시 만들기</button> <button class="ghost" data-delclass="${c.id}" data-name="${esc(n(c))}" data-cnt="${cnt}" style="margin-top:.5rem">반 삭제</button></div>`; }).join("") || "<p class='sub'>아직 만든 반이 없습니다. 아래에서 추가하세요.</p>";
+  $("list").innerHTML = rows.map(a => { const c = CL.find(x => x.id === a.class_id); return `<div class="item"><b>${esc(a.title)}</b> <span class="code">${esc(a.code)}</span> <span class="sub">${c ? esc(n(c)) : ""}</span><br>${esc(a.sentence)}<br><button class="ghost" data-id="${a.id}" data-title="${esc(a.title)}" style="margin-top:.5rem">결과 보기</button> <button class="ghost" data-del="${a.id}" data-title="${esc(a.title)}" style="margin-top:.5rem">삭제</button></div>`; }).join("") || "<p class='sub'>아직 과제가 없습니다.</p>";
 }
 const tErr = e => say("t-status", e.message, true);
 $("t-classes").onclick = async e => {
@@ -343,6 +368,11 @@ $("t-classes").onclick = async e => {
       if (!confirm("코드를 새로 만들면 이전 코드와 링크는 더 이상 쓸 수 없습니다. 계속할까요?")) return;
       await api(`/api/classes/${t.dataset.regen}/code`, { method: "POST" });
       say("t-status", "새 코드를 만들었습니다. 학생들에게 새 코드를 알려 주세요."); await loadMine();
+    } else if (t.dataset.delclass) {
+      const extra = +t.dataset.cnt ? `\n이 반의 과제 ${t.dataset.cnt}개와 학생 제출 기록·녹음도 모두 지워집니다.` : "";
+      if (!confirm(`'${t.dataset.name}'을(를) 삭제할까요?${extra}\n되돌릴 수 없고, 학생들의 반 코드도 쓸 수 없게 됩니다.`)) return;
+      await api("/api/classes/" + t.dataset.delclass, { method: "DELETE" });
+      $("rpanel").hidden = true; say("t-status", "반을 삭제했습니다."); await loadMine();
     }
   } catch (err) { tErr(err); }
 };
@@ -368,21 +398,61 @@ $("create").onclick = async () => {
   try { await api("/api/assignments", { method: "POST", body: JSON.stringify({ class_id: $("t-class").value, title: $("t-title").value, sentence: $("t-sentence").value }) }); $("t-title").value = $("t-sentence").value = ""; say("t-status", "과제를 만들었습니다."); await loadMine(); }
   catch (e) { tErr(e); }
 };
+let SUBS = [], SUB_TITLE = "";
+const when = s => new Date(s).toLocaleString("ko-KR");
+function groupSubs(rows) {  // rows는 최신순. 학번(없으면 이름) 기준으로 묶음
+  const m = new Map();
+  for (const r of rows) {
+    const k = r.student_no ? "n:" + r.student_no : "s:" + r.student.trim().toLowerCase();
+    if (!m.has(k)) m.set(k, { no: r.student_no || "", name: r.student, best: r.score, list: [] });
+    const g = m.get(k); g.best = Math.max(g.best, r.score); g.list.push(r);
+  }
+  return [...m.values()].sort((a, b) => (!a.no) - (!b.no) || a.no.localeCompare(b.no, "ko", { numeric: true }) || a.name.localeCompare(b.name, "ko"));
+}
+function renderResults() {
+  const gs = groupSubs(SUBS);
+  $("rh").textContent = `${SUB_TITLE} — ${gs.length}명 · 제출 ${SUBS.length}건`;
+  $("results").innerHTML = "<tr><th>학번</th><th>이름</th><th>최고 점수</th><th>제출</th><th>최근 제출</th><th></th></tr>" + gs.map((g, i) =>
+    `<tr><td>${esc(g.no || "-")}</td><td>${esc(g.name)}</td><td><b>${esc(g.best)}%</b></td><td>${g.list.length}회</td><td>${esc(when(g.list[0].created_at))}</td><td><button class="ghost" data-tg="${i}">기록 ▾</button></td></tr>` +
+    `<tr id="det${i}" hidden><td colspan="6">${g.list.map(r => `<div class="att">${esc(when(r.created_at))} · <b>${esc(r.score)}%</b> · ${esc(r.transcript)} ${r.audio_path ? `<button class="ghost" data-play="${r.id}">▶</button>` : ""}</div>`).join("")}</td></tr>`).join("");
+}
+const cell = v => { let s = String(v ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };  // 엑셀 수식 실행 방지
+function saveCsv(all) {
+  const gs = groupSubs(SUBS);
+  const rows = all
+    ? [["학번", "이름", "점수(%)", "제출 시간", "인식 결과"], ...gs.flatMap(g => g.list.map(r => [r.student_no || "", r.student, r.score, when(r.created_at), r.transcript]))]
+    : [["학번", "이름", "최고 점수(%)", "제출 횟수", "최근 제출"], ...gs.map(g => [g.no, g.name, g.best, g.list.length, when(g.list[0].created_at)])];
+  const blob = new Blob(["\uFEFF" + rows.map(r => r.map(cell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${SUB_TITLE}_${all ? "전체기록" : "최고점수"}.csv`.replace(/[\\/:*?"<>|]/g, "_");
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$("csv-best").onclick = () => saveCsv(false);
+$("csv-all").onclick = () => saveCsv(true);
 $("list").onclick = async e => {
-  const id = e.target.dataset.id; if (!id) return;
+  const t = e.target;
   try {
-    const rows = await api("/api/submissions?assignment_id=" + id);
-    $("rh").textContent = e.target.dataset.title + " — 제출 " + rows.length + "건";
-    $("results").innerHTML = "<tr><th>학번</th><th>이름</th><th>점수</th><th>시간</th><th>인식 결과</th><th>녹음</th></tr>" + rows.map(r => `<tr><td>${esc(r.student_no || "-")}</td><td>${esc(r.student)}</td><td>${esc(r.score)}%</td><td>${esc(new Date(r.created_at).toLocaleString("ko-KR"))}</td><td>${esc(r.transcript)}</td><td>${r.audio_path ? `<button class="ghost" data-play="${r.id}">▶</button>` : "-"}</td></tr>`).join("");
-    $("rpanel").hidden = false; $("rpanel").scrollIntoView({ behavior: "smooth" });
+    if (t.dataset.id) {
+      SUBS = await api("/api/submissions?assignment_id=" + t.dataset.id); SUB_TITLE = t.dataset.title;
+      renderResults(); $("rpanel").hidden = false; $("rpanel").scrollIntoView({ behavior: "smooth" });
+    } else if (t.dataset.del) {
+      if (!confirm(`과제 '${t.dataset.title}'을(를) 삭제할까요?\n학생들의 제출 기록과 녹음도 모두 지워지고, 되돌릴 수 없어요.`)) return;
+      await api("/api/assignments/" + t.dataset.del, { method: "DELETE" });
+      $("rpanel").hidden = true; say("t-status", "과제를 삭제했습니다."); await loadMine();
+    }
   } catch (err) { tErr(err); }
 };
 $("results").onclick = async e => {
-  const id = e.target.dataset.play; if (!id) return;
+  const t = e.target;
   try {
-    const res = await fetch("/api/audio/" + id, { headers: { Authorization: "Bearer " + await token() } });
-    if (!res.ok) throw new Error("녹음을 불러오지 못했습니다.");
-    new Audio(URL.createObjectURL(await res.blob())).play();
+    if (t.dataset.tg) {
+      const r = $("det" + t.dataset.tg); r.hidden = !r.hidden; t.textContent = r.hidden ? "기록 ▾" : "기록 ▴";
+    } else if (t.dataset.play) {
+      const res = await fetch("/api/audio/" + t.dataset.play, { headers: { Authorization: "Bearer " + await token() } });
+      if (!res.ok) throw new Error("녹음을 불러오지 못했습니다.");
+      new Audio(URL.createObjectURL(await res.blob())).play();
+    }
   } catch (err) { tErr(err); }
 };
 const WANT_ADMIN = location.hash === "#admin";
