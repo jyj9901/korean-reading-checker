@@ -26,6 +26,8 @@ SB_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SB_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 TEACHER_PW = os.getenv("TEACHER_PASSWORD", "")  # 관리자 비밀번호(선생님 사용 기간 관리용)
 SB_ANON = os.getenv("SUPABASE_ANON_KEY", "")
+KST = timezone(timedelta(hours=9))
+TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "30"))  # 신규 선생님 무료 체험 기간(일). 0이면 체험 없음
 
 # 발음형 변환(선택): pip install g2pk 가 되어 있으면 자동 사용
 try:
@@ -295,7 +297,12 @@ def save_me():
     if p:
         sb("PATCH", f"/rest/v1/teachers?id=eq.{u['id']}", json={"name": name, "school": school})
     else:
-        sb("POST", "/rest/v1/teachers", json={"id": u["id"], "email": u.get("email"), "name": name, "school": school})
+        row = {"id": u["id"], "email": u.get("email"), "name": name, "school": school}
+        if TRIAL_DAYS > 0:  # 신규 가입 1회만: 오늘 + TRIAL_DAYS일 (한국 시간 그날 밤 11:59:59까지)
+            end = datetime.now(KST) + timedelta(days=TRIAL_DAYS)
+            row["paid_until"] = end.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+            row["memo"] = f"무료 체험 {TRIAL_DAYS}일 자동 부여"
+        sb("POST", "/rest/v1/teachers", json=row)
     return jsonify(ok=True)
 
 
@@ -452,8 +459,6 @@ def get_audio(sid):
     mime = {"mp4": "audio/mp4", "ogg": "audio/ogg"}.get(path.rsplit(".", 1)[-1], "audio/webm")
     return Response(r.content, mimetype=mime)
 
-
-KST = timezone(timedelta(hours=9))
 
 
 def add_months(dt, m):
